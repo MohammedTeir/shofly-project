@@ -1,0 +1,64 @@
+name: ci
+on: { pull_request: {}, push: { branches: [main] } }
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: shofly, POSTGRES_PASSWORD: shofly, POSTGRES_DB: shofly_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U shofly" --health-interval 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://shofly:shofly@localhost:5432/shofly_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r backend/requirements.txt -r apps/telegram-bot/requirements.txt -r workers/media-worker/requirements.txt
+      - name: Backend tests (includes OpenAPI snapshot check)
+        run: python -m pytest -q
+        working-directory: backend
+      - name: Migrations apply, roll back and match the models
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://shofly:shofly@localhost:5432/shofly_test
+          TELEGRAM_BOT_TOKEN: ci
+          JWT_SIGNING_KEY: ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci
+        run: |
+          python - <<'PY'
+          from sqlalchemy import create_engine, text
+          e = create_engine("${{ env.TEST_DATABASE_URL }}")
+          with e.begin() as c: c.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"))
+          PY
+          alembic upgrade head && alembic check && alembic downgrade base && alembic upgrade head
+      - name: Bot tests
+        run: python -m pytest -q
+        working-directory: apps/telegram-bot
+      - name: Worker tests
+        run: python -m pytest -q
+        working-directory: workers/media-worker
+
+  web:
+    runs-on: ubuntu-latest
+    strategy: { matrix: { app: [apps/mini-app, apps/admin-dashboard] } }
+    defaults: { run: { working-directory: "${{ matrix.app }}" } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: "${{ matrix.app }}/package-lock.json" }
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm audit --audit-level=high
+        continue-on-error: true
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }

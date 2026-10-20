@@ -1,0 +1,19 @@
+.env
+*.db
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/
+stored/
+
+# Local Python environments and tooling
+.venv/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+
+# Local logs and OS/editor files
+*.log
+.DS_Store
+.vscode/
+.idea/
