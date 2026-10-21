@@ -101,7 +101,7 @@ def test_crash_mid_upload_never_completes(api, db, tmp_path):
 
 def test_oversize_and_expired_sources_fail_without_retry(api, db, tmp_path):
     (j,) = seed(db); s, c, p, dl = rig(api, tmp_path)
-    s.max_bytes = 100
+    s.download_max_bytes = 100
     assert process_one(c, p, s, dl, resolver=PUBLIC, probe_fn=INFO) == "FILE_TOO_LARGE"
     assert fresh(db, j.id).status == "FAILED"
     (j2,) = seed(db); s, c, p, dl = rig(api, tmp_path, handler=lambda r: httpx.Response(404))
