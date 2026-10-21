@@ -137,18 +137,19 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         if persistent and not e.retryable:
             mark_final(tmp)
         log.warning("job_failed job_id=%s code=%s stage_elapsed_s=%.1f retryable=%s", jid, e.code, time.monotonic()-started, e.retryable)
-        for uploaded_ref in uploaded_refs: provider.delete(uploaded_ref)
         _report(client, jid, e.code, e.message, e.retryable)
         return e.code
     except Exception:  # unexpected: generic safe message only, details stay in local logs
         log.exception("job %s crashed", jid)
-        for uploaded_ref in uploaded_refs: provider.delete(uploaded_ref)
         _report(client, jid, "UNEXPECTED", "Unexpected worker error.", True)
         return "UNEXPECTED"
     finally:
         if not completed:
             for uploaded_ref in uploaded_refs:
-                provider.delete(uploaded_ref)
+                try:
+                    provider.delete(uploaded_ref)
+                except Exception:
+                    log.warning("orphan_upload_cleanup_failed job_id=%s", jid)
         hb.stop_evt.set()
         if persistent and tmp.exists():
             clear_active(tmp)
