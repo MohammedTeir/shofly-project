@@ -10,6 +10,14 @@ from shofly_worker.client import BackendClient
 from shofly_worker.config import WorkerSettings
 from shofly_worker.providers import LocalDirProvider
 from shofly_worker.runner import run_until_empty, process_one
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def mock_media_container_detection(monkeypatch):
+    # The E2E fixture contains synthetic bytes, not a playable video.
+    # Real ffprobe/container detection is covered by test_media_extension.py.
+    monkeypatch.setattr("shofly_worker.runner.media_extension", lambda path: ".mp4")
 from helpers import PUBLIC
 
 NOW = datetime.now(timezone.utc)
