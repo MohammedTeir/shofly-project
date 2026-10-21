@@ -1,8 +1,7 @@
 """Optional parallel aria2c transfer for explicitly allowlisted HTTPS sources.
 
 Redirects are disabled. HTTPX remains the default for arbitrary URLs.
-Supports retries and partial resume during the same worker attempt only.
-Durable resume across Colab restarts requires persistent storage (phase 2).
+Supports retries and partial resume; persistence depends on a mounted directory.
 """
 import hashlib
 import os
