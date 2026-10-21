@@ -47,3 +47,25 @@ def verify_media(path: Path, timeout: int = 600, run=subprocess.run) -> None:
         raise WorkerError("FFMPEG_TIMEOUT", "Media integrity check timed out.", True)
     if result.returncode != 0:
         raise WorkerError("MEDIA_CORRUPT", "Media integrity verification failed.", False)
+
+
+def media_extension(path: Path, run=subprocess.run) -> str:
+    """Choose an extension from the probed container, never the source URL."""
+    try:
+        result = run(["ffprobe", "-v", "error", "-show_entries", "format=format_name",
+                      "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                     capture_output=True, text=True, timeout=120)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        raise WorkerError("PROBE_UNAVAILABLE", "Unable to identify media container.", True)
+    if result.returncode:
+        raise WorkerError("PROBE_FAILED", "Unable to identify media container.", False)
+    formats = set(result.stdout.strip().lower().split(","))
+    if "matroska" in formats or "webm" in formats:
+        return ".webm" if "webm" in formats and "matroska" not in formats else ".mkv"
+    if "mov" in formats or "mp4" in formats or "m4a" in formats or "3gp" in formats or "3g2" in formats or "mj2" in formats:
+        return ".mp4"
+    if "avi" in formats:
+        return ".avi"
+    if "mpegts" in formats:
+        return ".ts"
+    return ".bin"
