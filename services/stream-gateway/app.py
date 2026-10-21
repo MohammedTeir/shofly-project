@@ -96,7 +96,6 @@ async def stream(asset_id: UUID, request: Request, ticket: str = ""):
                "Cache-Control": "private, no-store", "Access-Control-Allow-Origin": ORIGIN,
                "Vary": "Origin", "X-Content-Type-Options": "nosniff",
                "Referrer-Policy": "no-referrer"}
-    if raw_range:
-        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-    return StreamingResponse(chunks(), status_code=206 if raw_range else 200,
+    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(chunks(), status_code=206,
                              media_type=mime, headers=headers)
