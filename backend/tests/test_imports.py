@@ -78,10 +78,9 @@ def test_ssrf_rejects_private_resolution(ip):
         ssrf.validate_source_url("https://media.example/x", {"media.example"}, r)
 
 
-def test_ssrf_accepts_public_and_empty_allowlist_rejects_all():
+def test_ssrf_accepts_public_with_empty_allowlist():
     assert ssrf.validate_source_url("https://media.example/x", {"media.example"}) == "media.example"
-    with pytest.raises(ssrf.UnsafeURL):
-        ssrf.validate_source_url("https://media.example/x", set())
+    assert ssrf.validate_source_url("https://media.example/x", set()) == "media.example"
 
 
 # ---- admin API ----

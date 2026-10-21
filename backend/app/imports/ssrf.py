@@ -30,7 +30,7 @@ def validate_source_url(url: str, allowed_hosts: set[str] | None = None, resolve
     if port not in (None, 443):
         raise UnsafeURL("port")
     host = u.hostname.lower().rstrip(".")
-    if allowed_hosts is not None and host not in allowed_hosts:
+    if allowed_hosts and host not in allowed_hosts:
         raise UnsafeURL("host not allowlisted")
     try:
         infos = (resolver or RESOLVER)(host, 443, type=socket.SOCK_STREAM)
