@@ -11,6 +11,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from shofly_worker.progress import TransferProgress
 from shofly_worker.errors import WorkerError
 
 log = logging.getLogger("shofly_worker")
@@ -56,11 +57,15 @@ def download_aria2(url: str, dest: Path, max_bytes: int, timeout: float,
     except FileNotFoundError:
         raise WorkerError("ARIA2_UNAVAILABLE", "aria2c is not installed.", False)
     deadline = time.monotonic() + timeout
+    progress = TransferProgress('download')
+    progress.start(None)
     try:
         while proc.poll() is None:
             check()
             if time.monotonic() > deadline:
                 raise WorkerError("DOWNLOAD_TIMEOUT", "Download timed out.", True)
+            if dest.exists():
+                progress.update(dest.stat().st_size)
             if dest.exists() and dest.stat().st_size > max_bytes:
                 raise WorkerError("FILE_TOO_LARGE", "File exceeds the configured size limit.", False)
             time.sleep(0.5)
@@ -78,6 +83,7 @@ def download_aria2(url: str, dest: Path, max_bytes: int, timeout: float,
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 check()
                 digest.update(chunk)
+        progress.finish(size)
         return size, digest.hexdigest()
     finally:
         if proc.poll() is None:
