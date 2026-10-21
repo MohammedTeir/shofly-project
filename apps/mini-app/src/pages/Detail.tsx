@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ApiError, getSeason, getTitle, requestAccess, setFavorite } from "../api";
+import { ApiError, getSeason, getTitle, requestAccess, requestPlayback, setFavorite } from "../api";
 import { useAsync } from "../hooks";
 import { ErrorBox, Message, Skeleton } from "../components/ui";
 import type { Asset, Episode, Kind } from "../types";
@@ -24,6 +24,33 @@ function SendButton({ asset, className = "" }: { asset: Asset; className?: strin
   </>;
 }
 
+function WatchButton({ asset }: { asset: Asset }) {
+  const { i18n } = useTranslation();
+  const [url, setUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const watch = async () => {
+    setBusy(true); setError(""); setUrl(null);
+    try {
+      const response = await requestPlayback(asset.id);
+      setUrl(response.playback_url);
+    } catch (e) {
+      setError(e instanceof ApiError && e.code === "STREAMING_NOT_CONFIGURED"
+        ? (i18n.language === "ar" ? "المشاهدة داخل التطبيق غير مفعّلة بعد" : "In-app streaming is not enabled yet")
+        : (i18n.language === "ar" ? "الفيديو غير متاح للمشاهدة هنا حاليًا" : "This video is not available for in-app playback"));
+    } finally { setBusy(false); }
+  };
+  return <div className="space-y-2">
+    <button disabled={busy} onClick={watch} className="min-h-11 w-full rounded-card bg-accent px-3 font-semibold text-white">
+      {busy ? "…" : (i18n.language === "ar" ? "▶ شاهد الآن" : "▶ Watch now")}
+    </button>
+    {url && <video key={url} src={url} controls playsInline preload="metadata"
+      referrerPolicy="no-referrer" className="w-full rounded-card bg-black"
+      onError={() => setError(i18n.language === "ar" ? "تعذر تشغيل الفيديو. جرّب إرساله عبر Telegram." : "Playback failed. Try Telegram delivery.")} />}
+    {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+  </div>;
+}
+
 function Season({ id, n }: { id: string; n: number }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -41,7 +68,7 @@ function Season({ id, n }: { id: string; n: number }) {
       {open && (eps === "error" ? <p className="px-4 pb-3 text-danger">{t("load_failed")}</p>
         : !eps ? <p className="px-4 pb-3 text-muted">{t("loading")}</p>
         : !eps.length ? <p className="px-4 pb-3 text-muted">{t("episodes_empty")}</p>
-        : <ol className="px-4 pb-3">{eps.map((e) => <li key={e.id} className="py-1 text-sm">{e.episode_number}. {e.title ?? "—"}{e.assets?.[0] && <div className="pt-1"><SendButton asset={e.assets[0]} /></div>}</li>)}</ol>)}
+        : <ol className="px-4 pb-3">{eps.map((e) => <li key={e.id} className="py-1 text-sm">{e.episode_number}. {e.title ?? "—"}{e.assets?.[0] && <div className="pt-1"><WatchButton asset={e.assets[0]} /><SendButton asset={e.assets[0]} /></div>}</li>)}</ol>)}
     </div>
   );
 }
@@ -66,7 +93,7 @@ export default function Detail({ kind, id }: { kind: Kind; id: string }) {
       {data.original_title !== data.title && <p className="mt-1 text-sm text-muted">{t("original_title")}: {data.original_title}</p>}
       {data.synopsis && <p className="mt-4 leading-relaxed">{data.synopsis}</p>}
       {data.kind === "movie" && (data.assets?.length
-        ? <div className="mt-4 space-y-2">{data.assets.map((a) => <SendButton key={a.id} asset={a} className="w-full" />)}</div>
+        ? <div className="mt-4 space-y-2">{data.assets.map((a) => <div key={a.id} className="space-y-2"><WatchButton asset={a} /><SendButton asset={a} className="w-full" /></div>)}</div>
         : <p className="mt-4 rounded-card bg-surface p-3 text-sm text-muted">{t("playback_pending")}</p>)}
       <button onClick={toggle} aria-pressed={!!fav} className="mt-4 min-h-12 w-full rounded-card bg-accent px-4 font-semibold text-white">
         {fav ? t("remove_fav") : t("add_fav")}
