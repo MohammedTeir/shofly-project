@@ -148,6 +148,7 @@ class MTProtoTelegramProvider:
         size = local_path.stat().st_size
         if size > self.max:
             raise WorkerError("FILE_TOO_LARGE", "File exceeds configured MTProto upload limit.", False)
+        video_mode = local_path.suffix.lower() == ".mp4"
         async def send(client):
             if self.parallel_workers > 1:
                 from shofly_worker.parallel_upload import upload_parallel
@@ -160,19 +161,19 @@ class MTProtoTelegramProvider:
                     progress = TransferProgress("upload")
                     progress.start(size)
                     message = await client.send_file(
-                        self.chat_id, str(local_path), force_document=True,
+                        self.chat_id, str(local_path), force_document=not video_mode, supports_streaming=video_mode,
                         progress_callback=lambda sent, total: progress.update(sent)
                     )
                     progress.finish(size)
                 else:
                     message = await client.send_file(
-                        self.chat_id, uploaded, force_document=True
+                        self.chat_id, uploaded, force_document=not video_mode, supports_streaming=video_mode
                     )
             else:
                 progress = TransferProgress("upload")
                 progress.start(size)
                 message = await client.send_file(
-                    self.chat_id, str(local_path), force_document=True,
+                    self.chat_id, str(local_path), force_document=not video_mode, supports_streaming=video_mode,
                     progress_callback=lambda sent, total: progress.update(sent)
                 )
                 progress.finish(size)
