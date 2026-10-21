@@ -168,8 +168,14 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
 def _report(client, jid, code, msg, retryable):
     try:
         client.fail(jid, code, msg, retryable)
-    except (LeaseLost, ApiError, httpx.HTTPError):
-        pass  # lease will expire and the backend will reclaim it
+    except LeaseLost:
+        log.warning("job_failure_report_rejected job_id=%s reason=lease_lost", jid)
+    except ApiError as exc:
+        log.warning("job_failure_report_rejected job_id=%s reason=backend_error code=%s", jid, exc.code)
+    except httpx.HTTPError as exc:
+        log.warning("job_failure_report_failed job_id=%s reason=%s", jid, type(exc).__name__)
+    else:
+        log.info("job_failure_report_accepted job_id=%s error_code=%s", jid, code)
 
 
 def run_until_empty(client, provider, settings, dl_http, max_jobs: int = 100, **kw) -> list[str]:
