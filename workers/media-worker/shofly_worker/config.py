@@ -17,3 +17,4 @@ class WorkerSettings(BaseSettings):
     poll_seconds: int = 30                       # pause between queue checks when idle (CLI loop)
     tmp_dir: str = "/tmp/shofly"
     allowed_hosts: str = ""                      # optional extra allowlist (comma separated)
+    downloader: str = "httpx"                    # httpx (default) | aria2c (allowlisted hosts only)
