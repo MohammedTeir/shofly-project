@@ -116,6 +116,41 @@ def retry(jid: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(ge
     return out(j)
 
 
+
+class RefreshSourceIn(BaseModel):
+    source_ref: str = Field(min_length=8, max_length=2000)
+
+
+@router.post("/{jid}/refresh-source")
+def refresh_source(jid: uuid.UUID, body: RefreshSourceIn, admin: User = Depends(staff),
+                   db: Session = Depends(get_db)):
+    """Replace an expired direct URL and requeue the same approved import job."""
+    j = db.scalar(select(ImportJob).where(ImportJob.id == jid).with_for_update())
+    if j is None:
+        raise AppError(404, "NOT_FOUND", "Not found.")
+    if j.source_type != "direct_url" or j.status not in ("FAILED", "EXPIRED_SOURCE", "RETRY_WAIT"):
+        raise AppError(409, "INVALID_TRANSITION", "Source can only be refreshed for a stopped direct URL import.")
+    if j.lease_owner is not None:
+        raise AppError(409, "JOB_LEASED", "Wait until the active worker lease has ended.")
+    if not j.candidate_kind or not j.target_id or not has_valid_rights(db, j.candidate_kind, j.target_id):
+        raise AppError(409, "RIGHTS_NOT_APPROVED", "Approved rights are required before retrying.")
+    try:
+        validate_source_url(body.source_ref, get_settings().import_hosts)
+    except UnsafeURL as exc:
+        raise AppError(422, "UNSAFE_SOURCE", f"Source rejected ({exc}).")
+    j.source_ref_encrypted = encrypt(body.source_ref)
+    j.status = "READY"
+    j.lease_epoch += 1
+    j.lease_owner = j.lease_until = j.next_attempt_at = None
+    j.attempts = 0
+    j.progress_percent = 0
+    j.error_code = j.error_message_safe = None
+    audit(db, admin.id, "import.source_refresh", "import_job", j.id,
+          {"source_type": "direct_url", "url_redacted": True})
+    db.commit()
+    return out(j)
+
+
 @router.post("/{jid}/cancel")
 def cancel(jid: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(get_db)):
     j = _job(db, jid)
