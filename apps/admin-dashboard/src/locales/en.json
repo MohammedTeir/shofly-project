@@ -90,5 +90,9 @@
   "select_title": "Select movie",
   "select_series": "Select series",
   "select_episode": "Select episode",
-  "import_hint_select": "Select the title first. The system links its ID automatically and checks approved rights before processing."
+  "import_hint_select": "Select the title first. The system links its ID automatically and checks approved rights before processing.",
+  "refresh_source_url": "Update download URL",
+  "new_source_url": "New download URL",
+  "refresh_source_hint": "Replaces the expired URL and requeues the same import job.",
+  "save_and_retry": "Save URL & retry"
 }
