@@ -97,16 +97,36 @@ class MTProtoTelegramProvider:
 
     def _run(self, operation):
         import asyncio
+        import threading
         from telethon import TelegramClient
-        from telethon.sessions import StringSession
-        from pathlib import Path
+
         async def execute():
             Path(self.session_path).parent.mkdir(parents=True, exist_ok=True)
             async with TelegramClient(self.session_path, self.api_id, self.api_hash) as client:
                 if not await client.is_user_authorized():
                     await client.start(bot_token=self.bot_token)
                 return await operation(client)
-        return asyncio.run(execute())
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(execute())
+
+        # Colab/Jupyter already runs an event loop in the calling thread.
+        # Run Telethon in a dedicated thread with its own loop instead.
+        outcome = {}
+        def worker():
+            try:
+                outcome["result"] = asyncio.run(execute())
+            except BaseException as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join()
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def upload(self, local_path: Path, meta: dict) -> str:
         size = local_path.stat().st_size
