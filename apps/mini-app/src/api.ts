@@ -45,3 +45,5 @@ export const getSeason = (id: string, n: number) => call<{ season_number: number
 export const getFavorites = () => call<Page>("GET", "/me/favorites?limit=50");
 export const setFavorite = (k: Kind, id: string, on: boolean) => call<{ favorited: boolean }>(on ? "PUT" : "DELETE", `/me/favorites/${k}/${id}`);
 export const requestAccess = (assetId: string) => call<{ delivery_type: string; bot_deep_link?: string }>("POST", `/media/${assetId}/access`, {});
+
+export const requestPlayback = (assetId: string) => call<{ playback_url: string; expires_in: number }>("POST", `/media/${assetId}/playback`, {});
