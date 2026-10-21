@@ -10,7 +10,7 @@ from shofly_worker.client import ApiError, BackendClient
 from shofly_worker.downloader import download
 from shofly_worker.aria2_downloader import download_aria2
 from shofly_worker.errors import LeaseLost, SourceExpired, WorkerError
-from shofly_worker.probe import probe
+from shofly_worker.probe import probe, verify_media
 from shofly_worker.retention import job_dir, mark_final, cleanup, touch_active, clear_active
 
 log = logging.getLogger("shofly_worker")
@@ -90,7 +90,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         log.info("download_complete job_id=%s bytes=%s elapsed_s=%.1f", jid, size, time.monotonic()-started)
         check(); client.progress(jid, "PROBING", 40)
         info = probe_fn(tmp / "source.bin")
-        log.info("probe_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
+        log.info("probe_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)\n        if getattr(settings, "ffmpeg_verify", False):\n            check()\n            verify_media(tmp / "source.bin", settings.ffmpeg_verify_timeout)\n            log.info("media_integrity_verified job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         check(); client.progress(jid, "UPLOADING", 60)
         ref = provider.upload(tmp / "source.bin", info)
         log.info("upload_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
