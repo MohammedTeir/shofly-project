@@ -92,11 +92,14 @@ class MTProtoTelegramProvider:
     name = "telegram"
 
     def __init__(self, api_id: int, api_hash: str, bot_token: str, chat_id: str,
-                 session_path: str, max_bytes: int = 2 * 1024**3):
+                 session_path: str, max_bytes: int = 2 * 1024**3, parallel_workers: int = 8):
         if not api_id or not api_hash or not bot_token or not chat_id:
             raise ValueError("MTProto API credentials and storage channel are required")
         self.api_id, self.api_hash, self.bot_token = api_id, api_hash, bot_token
         self.chat_id, self.session_path, self.max = int(chat_id), session_path, max_bytes
+        if not 1 <= parallel_workers <= 8:
+            raise ValueError("parallel_workers must be between 1 and 8")
+        self.parallel_workers = parallel_workers
         self._receipts = {}
 
     def _run(self, operation):
@@ -145,20 +148,40 @@ class MTProtoTelegramProvider:
         size = local_path.stat().st_size
         if size > self.max:
             raise WorkerError("FILE_TOO_LARGE", "File exceeds configured MTProto upload limit.", False)
-        progress = TransferProgress('upload')
-        progress.start(size)
-        def on_progress(sent, total):
-            progress.update(sent)
         async def send(client):
-            message = await client.send_file(self.chat_id, str(local_path), force_document=True, progress_callback=on_progress)
-            if not message or not message.file:
+            if self.parallel_workers > 1:
+                from shofly_worker.parallel_upload import upload_parallel
+                try:
+                    uploaded = await upload_parallel(client, local_path, self.parallel_workers)
+                    message = await client.send_file(
+                        self.chat_id, uploaded, force_document=True
+                    )
+                except Exception as exc:
+                    log.warning("parallel_upload_failed exception_type=%s falling_back=sequential", type(exc).__name__)
+                    # Re-upload from scratch using Telethon's supported path.
+                    progress = TransferProgress("upload")
+                    progress.start(size)
+                    message = await client.send_file(
+                        self.chat_id, str(local_path), force_document=True,
+                        progress_callback=lambda sent, total: progress.update(sent)
+                    )
+                    progress.finish(size)
+            else:
+                progress = TransferProgress("upload")
+                progress.start(size)
+                message = await client.send_file(
+                    self.chat_id, str(local_path), force_document=True,
+                    progress_callback=lambda sent, total: progress.update(sent)
+                )
+                progress.finish(size)
+            if not message or not message.file or not message.document:
                 raise RuntimeError("Telegram did not return a file receipt")
+            if message.file.size != size:
+                raise RuntimeError("Telegram receipt size mismatch")
             return message.id, message.file.size, message.document.id
         try:
             mid, reported_size, document_id = self._run(send)
-            progress.finish(size)
         except Exception as exc:
-            # Avoid exception messages: Telethon may include sensitive identifiers.
             log.warning("mtproto_upload_failed exception_type=%s", type(exc).__name__)
             raise WorkerError("UPLOAD_FAILED", "MTProto upload failed.", True) from exc
         ref = f"{self.chat_id}:{mid}:mtproto-{document_id}"
