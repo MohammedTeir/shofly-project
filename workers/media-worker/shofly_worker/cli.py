@@ -3,7 +3,7 @@ import time
 import httpx
 from shofly_worker.client import BackendClient
 from shofly_worker.config import WorkerSettings
-from shofly_worker.providers import LocalDirProvider, TelegramProvider
+from shofly_worker.providers import LocalDirProvider, TelegramProvider, MTProtoTelegramProvider
 from shofly_worker.runner import run_until_empty
 
 log = logging.getLogger("shofly_worker")
@@ -14,6 +14,12 @@ def build_provider(s: WorkerSettings):
         if not (s.telegram_bot_token and s.telegram_chat_id):
             raise SystemExit("PROVIDER=telegram needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
         return TelegramProvider(s.telegram_bot_token, s.telegram_chat_id, s.max_bytes)
+    if s.provider == "telegram_mtproto":
+        if not (s.telegram_api_id and s.telegram_api_hash and s.telegram_bot_token and s.telegram_chat_id):
+            raise SystemExit("telegram_mtproto needs Telegram API ID/hash, bot token and channel")
+        return MTProtoTelegramProvider(s.telegram_api_id, s.telegram_api_hash,
+                                       s.telegram_bot_token, s.telegram_chat_id,
+                                       s.telegram_session, s.mtproto_max_bytes)
     if s.provider == "local":
         return LocalDirProvider(s.local_dir)
     raise SystemExit(f"unknown PROVIDER {s.provider!r} (use telegram or local)")
