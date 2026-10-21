@@ -11,6 +11,7 @@ from shofly_worker.downloader import download
 from shofly_worker.aria2_downloader import download_aria2
 from shofly_worker.errors import LeaseLost, SourceExpired, WorkerError
 from shofly_worker.probe import probe
+from shofly_worker.retention import job_dir, mark_final, cleanup
 
 log = logging.getLogger("shofly_worker")
 
@@ -39,8 +40,9 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         return None
     jid = job["id"]
     persistent = bool(settings.persistent_download_dir) and settings.downloader == "aria2c"
-    tmp = Path(settings.persistent_download_dir if persistent else settings.tmp_dir) / jid
-    retain_partial = False
+    tmp = job_dir(settings.persistent_download_dir, jid) if persistent else Path(settings.tmp_dir) / jid
+    retain_partial = persistent
+    completed = False
     if persistent:
         # A partial transfer may be resumed only for the exact same source.
         marker = tmp / "source.json"
@@ -94,14 +96,17 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                 provider.delete(ref)  # never leave unlicensed media in storage
                 return "BLOCKED_RIGHTS"
             raise
+        completed = True
         log.info("job_completed job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         return "COMPLETED"
     except LeaseLost:
-        retain_partial = persistent and ref is None
+        retain_partial = persistent
         if ref: provider.delete(ref)  # someone else owns the job now; our upload is an orphan
         return "LEASE_LOST"
     except WorkerError as e:
-        retain_partial = persistent and e.retryable and ref is None
+        retain_partial = persistent
+        if persistent and not e.retryable:
+            mark_final(tmp)
         log.warning("job_failed job_id=%s code=%s stage_elapsed_s=%.1f retryable=%s", jid, e.code, time.monotonic()-started, e.retryable)
         if ref: provider.delete(ref)
         _report(client, jid, e.code, e.message, e.retryable)
@@ -113,7 +118,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         return "UNEXPECTED"
     finally:
         hb.stop_evt.set()
-        if not retain_partial:
+        if completed or not retain_partial:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -126,6 +131,11 @@ def _report(client, jid, code, msg, retryable):
 
 def run_until_empty(client, provider, settings, dl_http, max_jobs: int = 100, **kw) -> list[str]:
     results = []
+    if getattr(settings, "persistent_download_dir", "") and getattr(settings, "downloader", "httpx") == "aria2c":
+        try:
+            cleanup(settings.persistent_download_dir)
+        except (OSError, ValueError) as exc:
+            log.warning("retention_cleanup_failed reason=%s", type(exc).__name__)
     for _ in range(max_jobs):
         out = process_one(client, provider, settings, dl_http, **kw)
         if out is None:
