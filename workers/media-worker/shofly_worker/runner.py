@@ -11,6 +11,7 @@ from shofly_worker.downloader import download
 from shofly_worker.aria2_downloader import download_aria2
 from shofly_worker.errors import LeaseLost, SourceExpired, WorkerError
 from shofly_worker.probe import probe, verify_media
+from shofly_worker.segmentation import split_playable
 from shofly_worker.retention import job_dir, mark_final, cleanup, touch_active, clear_active
 
 log = logging.getLogger("shofly_worker")
@@ -60,6 +61,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
 
     hb = Heartbeat(client, jid, settings.heartbeat_seconds); hb.start()
     ref = None
+    uploaded_refs = []
     started = time.monotonic()
     log.info("job_started job_id=%s", jid)
 
@@ -92,17 +94,34 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         info = probe_fn(tmp / "source.bin")
         log.info("probe_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)\n        if getattr(settings, "ffmpeg_verify", False):\n            check()\n            verify_media(tmp / "source.bin", settings.ffmpeg_verify_timeout)\n            log.info("media_integrity_verified job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         check(); client.progress(jid, "UPLOADING", 60)
-        ref = provider.upload(tmp / "source.bin", info)
-        log.info("upload_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
+        source = tmp / "source.bin"
+        provider_limit = getattr(provider, "max", None)
+        part_limit = getattr(settings, "segment_max_bytes", 0) or provider_limit
+        if part_limit and provider_limit:
+            part_limit = min(part_limit, provider_limit)
+        if getattr(settings, "split_large_media", False) and part_limit and size > part_limit:
+            parts = split_playable(source, tmp / "segments", part_limit,
+                                   info["duration_sec"])
+        else:
+            parts = [source]
+        for index, part in enumerate(parts):
+            check()
+            part_ref = provider.upload(part, info)
+            uploaded_refs.append(part_ref)
+            check()
+            if not provider.verify(part_ref, part.stat().st_size):
+                raise WorkerError("VERIFY_FAILED", "Uploaded part could not be verified.", True)
+            log.info("segment_verified job_id=%s part=%s total=%s",
+                     jid, index + 1, len(parts))
+        ref = uploaded_refs[0]
         check(); client.progress(jid, "VERIFYING", 85)
-        if not provider.verify(ref, size):
-            raise WorkerError("VERIFY_FAILED", "Uploaded file could not be verified.", True)
-        check()
         try:
-            client.complete(jid, verified=True, provider=provider.name, provider_ref=ref, size_bytes=size, checksum_sha256=sha, **info)
+            client.complete(jid, verified=True, provider=provider.name,
+                            provider_ref=ref,
+                            segment_refs=uploaded_refs if len(uploaded_refs) > 1 else [],
+                            size_bytes=size, checksum_sha256=sha, **info)
         except ApiError as e:
             if e.code == "BLOCKED_RIGHTS":
-                provider.delete(ref)  # never leave unlicensed media in storage
                 retain_partial = False
                 return "BLOCKED_RIGHTS"
             raise
@@ -111,22 +130,25 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         return "COMPLETED"
     except LeaseLost:
         retain_partial = persistent
-        if ref: provider.delete(ref)  # someone else owns the job now; our upload is an orphan
+        for uploaded_ref in uploaded_refs: provider.delete(uploaded_ref)  # someone else owns the job now; our upload is an orphan
         return "LEASE_LOST"
     except WorkerError as e:
         retain_partial = persistent
         if persistent and not e.retryable:
             mark_final(tmp)
         log.warning("job_failed job_id=%s code=%s stage_elapsed_s=%.1f retryable=%s", jid, e.code, time.monotonic()-started, e.retryable)
-        if ref: provider.delete(ref)
+        for uploaded_ref in uploaded_refs: provider.delete(uploaded_ref)
         _report(client, jid, e.code, e.message, e.retryable)
         return e.code
     except Exception:  # unexpected: generic safe message only, details stay in local logs
         log.exception("job %s crashed", jid)
-        if ref: provider.delete(ref)
+        for uploaded_ref in uploaded_refs: provider.delete(uploaded_ref)
         _report(client, jid, "UNEXPECTED", "Unexpected worker error.", True)
         return "UNEXPECTED"
     finally:
+        if not completed:
+            for uploaded_ref in uploaded_refs:
+                provider.delete(uploaded_ref)
         hb.stop_evt.set()
         if persistent and tmp.exists():
             clear_active(tmp)
