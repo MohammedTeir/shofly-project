@@ -292,7 +292,7 @@
    "FailIn": {
     "properties": {
      "error_code": {
-      "pattern": "^[A-Z_]{3,40}$",
+      "pattern": "^[A-Z0-9_]{3,40}$",
       "title": "Error Code",
       "type": "string"
      },
