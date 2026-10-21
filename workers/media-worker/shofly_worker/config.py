@@ -21,7 +21,9 @@ class WorkerSettings(BaseSettings):
     downloader: str = "httpx"                    # httpx (default) | aria2c (allowlisted hosts only)
     aria2_connections: int = 4                 # 1-8 parallel connections per trusted source
     aria2_retries: int = 3                     # 1-5 attempts per transfer
-    ffmpeg_verify: bool = False               # opt-in full decode before upload\n    ffmpeg_verify_timeout: int = 600           # seconds; capped at 3600\n    telegram_api_id: int | None = None
+    ffmpeg_verify: bool = False               # opt-in full decode before upload
+    ffmpeg_verify_timeout: int = 600           # seconds; capped at 3600
+    telegram_api_id: int | None = None
     telegram_api_hash: str | None = None
     telegram_session: str = "/content/drive/MyDrive/Shofly/telegram_bot"
     mtproto_max_bytes: int = 2 * 1024 * 1024 * 1024
