@@ -1,8 +1,10 @@
 import hashlib
+import logging
 import time
 from pathlib import Path
 from urllib.parse import urljoin
 import httpx
+from shofly_worker.progress import TransferProgress
 from shofly_worker.errors import SourceExpired, WorkerError
 from shofly_worker.ssrf import UnsafeURL, check_url
 
@@ -13,6 +15,7 @@ def download(url: str, dest: Path, http: httpx.Client, max_bytes: int, timeout: 
     `check()` runs per chunk and may raise LeaseLost. Messages never contain the URL."""
     kw = {"resolver": resolver} if resolver else {}
     deadline = time.monotonic() + timeout
+    progress = TransferProgress('download')
     for _ in range(6):
         try:
             check_url(url, allowed_hosts, **kw)
@@ -34,6 +37,7 @@ def download(url: str, dest: Path, http: httpx.Client, max_bytes: int, timeout: 
                 if declared > max_bytes:
                     raise WorkerError("FILE_TOO_LARGE", "File exceeds the configured size limit.", False)
                 h, total = hashlib.sha256(), 0
+                progress.start(declared if declared > 0 else None)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with open(dest, "wb") as f:
                     for chunk in r.iter_bytes(1 << 20):
@@ -44,8 +48,10 @@ def download(url: str, dest: Path, http: httpx.Client, max_bytes: int, timeout: 
                             raise WorkerError("DOWNLOAD_TIMEOUT", "Download took too long.", True)
                         check()
                         h.update(chunk); f.write(chunk)
+                        progress.update(total)
                 if total == 0:
                     raise WorkerError("EMPTY_FILE", "Source returned no data.", False)
+                progress.finish(total)
                 return total, h.hexdigest()
         except httpx.HTTPError:
             raise WorkerError("DOWNLOAD_NETWORK_ERROR", "Network error while downloading.", True)
