@@ -20,3 +20,4 @@ class WorkerSettings(BaseSettings):
     downloader: str = "httpx"                    # httpx (default) | aria2c (allowlisted hosts only)
     aria2_connections: int = 4                 # 1-8 parallel connections per trusted source
     aria2_retries: int = 3                     # 1-5 attempts per transfer
+    persistent_download_dir: str = ""  # optional mounted storage for partial transfers
