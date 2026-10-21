@@ -60,7 +60,6 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         touch_active(tmp)
 
     hb = Heartbeat(client, jid, settings.heartbeat_seconds); hb.start()
-    ref = None
     uploaded_refs = []
     started = time.monotonic()
     log.info("job_started job_id=%s", jid)
@@ -85,14 +84,18 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         elif mode in ("httpx", "aria2c"):
             if mode == "aria2c":
                 log.info("aria2c_no_allowlist_fallback_httpx job_id=%s", jid)
-            size, sha = download(job["source_ref"], tmp / "source.bin", dl_http, settings.max_bytes,
+            size, sha = download(job["source_ref"], tmp / "source.bin", dl_http, getattr(settings, 'download_max_bytes', settings.max_bytes),
                                  settings.download_timeout, hosts, resolver, check)
         else:
             raise WorkerError("INVALID_DOWNLOADER", "Unknown downloader setting.", False)
         log.info("download_complete job_id=%s bytes=%s elapsed_s=%.1f", jid, size, time.monotonic()-started)
         check(); client.progress(jid, "PROBING", 40)
         info = probe_fn(tmp / "source.bin")
-        log.info("probe_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)\n        if getattr(settings, "ffmpeg_verify", False):\n            check()\n            verify_media(tmp / "source.bin", settings.ffmpeg_verify_timeout)\n            log.info("media_integrity_verified job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
+        log.info("probe_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
+        if getattr(settings, "ffmpeg_verify", False):
+            check()
+            verify_media(tmp / "source.bin", settings.ffmpeg_verify_timeout)
+            log.info("media_integrity_verified job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         check(); client.progress(jid, "UPLOADING", 60)
         source = tmp / "source.bin"
         provider_limit = getattr(provider, "max", None)
@@ -116,7 +119,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         ref = uploaded_refs[0]
         check(); client.progress(jid, "VERIFYING", 85)
         try:
-            client.complete(jid, verified=True, provider=provider.name,
+            receipt = client.complete(jid, verified=True, provider=provider.name,
                             provider_ref=ref,
                             segment_refs=uploaded_refs if len(uploaded_refs) > 1 else [],
                             size_bytes=size, checksum_sha256=sha, **info)
@@ -126,11 +129,16 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                 return "BLOCKED_RIGHTS"
             raise
         completed = True
+        if receipt.get("duplicate"):
+            for uploaded_ref in uploaded_refs:
+                try:
+                    provider.delete(uploaded_ref)
+                except Exception:
+                    log.warning("duplicate_cleanup_failed job_id=%s", jid)
         log.info("job_completed job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         return "COMPLETED"
     except LeaseLost:
         retain_partial = persistent
-        for uploaded_ref in uploaded_refs: provider.delete(uploaded_ref)  # someone else owns the job now; our upload is an orphan
         return "LEASE_LOST"
     except WorkerError as e:
         retain_partial = persistent
