@@ -36,8 +36,7 @@ async def set_commands(bot: Bot):
 
 async def health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     try:
-        while await reader.readline() != b"\r\n":
-            pass
+        await reader.readline()
         response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"
         writer.write(response)
         await writer.drain()
