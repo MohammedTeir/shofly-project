@@ -55,6 +55,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
             shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps({"fingerprint": fingerprint}))
+        (tmp / "retention.json").unlink(missing_ok=True)
 
     hb = Heartbeat(client, jid, settings.heartbeat_seconds); hb.start()
     ref = None
