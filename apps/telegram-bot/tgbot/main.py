@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -33,16 +34,37 @@ async def set_commands(bot: Bot):
                                   language_code=code)
 
 
+async def health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    try:
+        while await reader.readline() != b"\r\n":
+            pass
+        response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"
+        writer.write(response)
+        await writer.drain()
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
 async def main():
     logging.basicConfig(level=logging.INFO)
     s = BotSettings()
     api = BotApi(s.api_base_url, s.bot_api_token)
     bot = Bot(s.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = build_dispatcher(api, s)
+    health_server = await asyncio.start_server(
+        health_handler, "0.0.0.0", int(os.getenv("PORT", "10000"))
+    )
     await set_commands(bot)
     try:
-        await dp.start_polling(bot)  # dev: long polling. Webhook mode: pending.
+        async with health_server:
+            await asyncio.gather(
+                dp.start_polling(bot),
+                health_server.serve_forever(),
+            )
     finally:
+        health_server.close()
+        await health_server.wait_closed()
         await api.close()
         await bot.session.close()
 
