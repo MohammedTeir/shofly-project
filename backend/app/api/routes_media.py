@@ -1,7 +1,7 @@
 import uuid
 import time
 import jwt
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 from app.api.deps import current_user, require_bot_token
 from app.audit import audit
@@ -12,7 +12,6 @@ from app.core.errors import AppError
 from app.core.ratelimit import rate_limit
 from app.delivery import evaluate_asset
 from app.models import User
-from app.auth.tokens import decode_token
 
 router = APIRouter(prefix="/media", dependencies=[Depends(rate_limit("media", 30))])
 
@@ -64,14 +63,14 @@ def playback(asset_id: uuid.UUID, user: User = Depends(current_user), db: Sessio
         raise AppError(400, "STREAMING_UNSUPPORTED", "This asset requires Telegram delivery.")
     now = int(time.time())
     ticket = jwt.encode({"sub": str(user.id), "asset": str(asset.id), "aud": "shofly-stream",
-                         "iat": now, "exp": now + 120}, settings.streaming_signing_key, algorithm="HS256")
+                         "iat": now, "exp": now + 14400}, settings.streaming_signing_key, algorithm="HS256")
     return {"playback_url": settings.streaming_gateway_url.rstrip("/") + "/stream/" + str(asset.id) + "?ticket=" + ticket,
-            "expires_in": 120}
+            "expires_in": 14400}
 
 
 @router.post("/{asset_id}/stream-authorize")
 def stream_authorize(asset_id: uuid.UUID, payload: dict, db: Session = Depends(get_db),
-                     x_streaming_secret: str | None = __import__("fastapi").Header(None)):
+                     x_streaming_secret: str | None = Header(None)):
     """Gateway-only, fresh entitlement/rights check for every range request."""
     import hmac
     settings = get_settings()
