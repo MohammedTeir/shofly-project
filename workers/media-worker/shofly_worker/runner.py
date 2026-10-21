@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 from shofly_worker.client import ApiError, BackendClient
 from shofly_worker.downloader import download
+from shofly_worker.aria2_downloader import download_aria2
 from shofly_worker.errors import LeaseLost, SourceExpired, WorkerError
 from shofly_worker.probe import probe
 
@@ -47,8 +48,15 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
     try:
         check(); client.progress(jid, "DOWNLOADING", 5)
         hosts = {h.strip().lower() for h in settings.allowed_hosts.split(",") if h.strip()} or None
-        size, sha = download(job["source_ref"], tmp / "source.bin", dl_http, settings.max_bytes, settings.download_timeout,
-                             hosts, resolver, check)
+        mode = getattr(settings, "downloader", "httpx").lower()
+        if mode == "aria2c":
+            size, sha = download_aria2(job["source_ref"], tmp / "source.bin", settings.max_bytes,
+                                      settings.download_timeout, hosts, check)
+        elif mode == "httpx":
+            size, sha = download(job["source_ref"], tmp / "source.bin", dl_http, settings.max_bytes,
+                                 settings.download_timeout, hosts, resolver, check)
+        else:
+            raise WorkerError("INVALID_DOWNLOADER", "Unknown downloader setting.", False)
         log.info("download_complete job_id=%s bytes=%s elapsed_s=%.1f", jid, size, time.monotonic()-started)
         check(); client.progress(jid, "PROBING", 40)
         info = probe_fn(tmp / "source.bin")
