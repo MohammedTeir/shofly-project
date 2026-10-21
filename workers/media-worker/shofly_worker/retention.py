@@ -26,7 +26,18 @@ def job_dir(path: str, jid: str) -> Path:
     return root / jid
 
 
+def touch_active(folder: Path) -> None:
+    """Record a recent worker heartbeat for safe orphan cleanup."""
+    marker = folder / "active.json"
+    marker.write_text(json.dumps({"updated_at": time.time()}))
+
+
+def clear_active(folder: Path) -> None:
+    (folder / "active.json").unlink(missing_ok=True)
+
+
 def mark_final(folder: Path) -> None:
+    clear_active(folder)
     marker = folder / "retention.json"
     marker.write_text(json.dumps({"final_at": time.time()}))
 
@@ -44,13 +55,20 @@ def cleanup(path: str, now: float | None = None) -> int:
             meta = child / "retention.json"
             if meta.is_symlink():
                 continue
+            active = child / "active.json"
+            if active.is_symlink():
+                continue
             if meta.exists():
                 final_at = float(json.loads(meta.read_text())["final_at"])
                 expired = 0 <= final_at <= now - FINAL_TTL_SECONDS
             else:
                 # Crashed sessions may leave a job without a final marker.
                 # Seven-day grace prevents premature removal of recent transfers.
-                expired = child.stat().st_mtime <= now - ORPHAN_TTL_SECONDS
+                # Never delete a recently active transfer, even if the directory itself is old.
+                last_activity = child.stat().st_mtime
+                if active.exists():
+                    last_activity = max(last_activity, float(json.loads(active.read_text())["updated_at"]))
+                expired = last_activity <= now - ORPHAN_TTL_SECONDS
             if expired:
                 shutil.rmtree(child)
                 removed += 1
