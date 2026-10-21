@@ -1,7 +1,8 @@
 """Optional parallel aria2c transfer for explicitly allowlisted HTTPS sources.
 
 Redirects are disabled. HTTPX remains the default for arbitrary URLs.
-Supports retries and partial resume during the same worker attempt only.\nDurable resume across Colab restarts requires persistent storage (phase 2).
+Supports retries and partial resume during the same worker attempt only.
+Durable resume across Colab restarts requires persistent storage (phase 2).
 """
 import hashlib
 import os
@@ -14,20 +15,25 @@ from shofly_worker.ssrf import UnsafeURL, check_url
 
 
 def download_aria2(url: str, dest: Path, max_bytes: int, timeout: float,
-                   allowed_hosts: set[str] | None, check=lambda: None,\n                   connections: int = 4, retries: int = 3) -> tuple[int, str]:
+                   allowed_hosts: set[str] | None, check=lambda: None,
+                   connections: int = 4, retries: int = 3) -> tuple[int, str]:
     if not allowed_hosts:
         raise WorkerError("ARIA2_ALLOWLIST_REQUIRED", "aria2c requires explicitly allowed hosts.", False)
     try:
         check_url(url, allowed_hosts)
     except UnsafeURL:
         raise WorkerError("UNSAFE_SOURCE", "Source failed safety checks.", False)
-    if not 1 <= connections <= 8 or not 1 <= retries <= 5:\n        raise WorkerError("INVALID_DOWNLOAD_CONFIG", "Invalid transfer settings.", False)\n    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not 1 <= connections <= 8 or not 1 <= retries <= 5:
+        raise WorkerError("INVALID_DOWNLOAD_CONFIG", "Invalid transfer settings.", False)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     command = [
         "aria2c", "--no-conf=true", "--allow-overwrite=true",
         "--auto-file-renaming=false", "--max-redirect=0",
-        "--max-connection-per-server=" + str(connections), "--split=" + str(connections),\n        "--min-split-size=1M", "--continue=true",\n        "--retry-wait=3", "--max-tries=" + str(retries),
+        "--max-connection-per-server=" + str(connections), "--split=" + str(connections),
+        "--min-split-size=1M", "--continue=true",
+        "--retry-wait=3", "--max-tries=" + str(retries),
         "--file-allocation=none", "--console-log-level=error",
-        "--summary-interval=0", "--max-tries=1",
+        "--summary-interval=0",
         "--no-proxy=*", "--max-file-size=" + str(max_bytes),
         "--dir=" + str(dest.parent), "--out=" + dest.name, url,
     ]
@@ -69,4 +75,5 @@ def download_aria2(url: str, dest: Path, max_bytes: int, timeout: float,
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-        # Preserve aria2 control data for retries within this worker attempt.\n        # The runner owns temp directory cleanup; phase 2 will persist partial files.
+        # Preserve aria2 control data for retries within this worker attempt.
+        # The runner owns temp directory cleanup; phase 2 will persist partial files.
