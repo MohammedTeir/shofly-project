@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 import httpx
+from shofly_worker.progress import TransferProgress
 from shofly_worker.errors import WorkerError
 
 log = logging.getLogger("shofly_worker")
@@ -144,13 +145,18 @@ class MTProtoTelegramProvider:
         size = local_path.stat().st_size
         if size > self.max:
             raise WorkerError("FILE_TOO_LARGE", "File exceeds configured MTProto upload limit.", False)
+        progress = TransferProgress('upload')
+        progress.start(size)
+        def on_progress(sent, total):
+            progress.update(sent)
         async def send(client):
-            message = await client.send_file(self.chat_id, str(local_path), force_document=True)
+            message = await client.send_file(self.chat_id, str(local_path), force_document=True, progress_callback=on_progress)
             if not message or not message.file:
                 raise RuntimeError("Telegram did not return a file receipt")
             return message.id, message.file.size, message.document.id
         try:
             mid, reported_size, document_id = self._run(send)
+            progress.finish(size)
         except Exception as exc:
             # Avoid exception messages: Telethon may include sensitive identifiers.
             log.warning("mtproto_upload_failed exception_type=%s", type(exc).__name__)
