@@ -11,7 +11,7 @@ from shofly_worker.downloader import download
 from shofly_worker.aria2_downloader import download_aria2
 from shofly_worker.errors import LeaseLost, SourceExpired, WorkerError
 from shofly_worker.probe import probe
-from shofly_worker.retention import job_dir, mark_final, cleanup
+from shofly_worker.retention import job_dir, mark_final, cleanup, touch_active, clear_active
 
 log = logging.getLogger("shofly_worker")
 
@@ -56,15 +56,21 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         tmp.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps({"fingerprint": fingerprint}))
         (tmp / "retention.json").unlink(missing_ok=True)
+        touch_active(tmp)
 
     hb = Heartbeat(client, jid, settings.heartbeat_seconds); hb.start()
     ref = None
     started = time.monotonic()
     log.info("job_started job_id=%s", jid)
 
+    last_touch = [0.0]
+
     def check():
         if hb.lost.is_set():
             raise LeaseLost()
+        if persistent and time.monotonic() - last_touch[0] >= 30:
+            touch_active(tmp)
+            last_touch[0] = time.monotonic()
 
     try:
         check(); client.progress(jid, "DOWNLOADING", 5)
@@ -97,6 +103,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         except ApiError as e:
             if e.code == "BLOCKED_RIGHTS":
                 provider.delete(ref)  # never leave unlicensed media in storage
+                retain_partial = False
                 return "BLOCKED_RIGHTS"
             raise
         completed = True
@@ -121,6 +128,8 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         return "UNEXPECTED"
     finally:
         hb.stop_evt.set()
+        if persistent and tmp.exists():
+            clear_active(tmp)
         if completed or not retain_partial:
             shutil.rmtree(tmp, ignore_errors=True)
 
