@@ -45,7 +45,7 @@ function WatchButton({ asset }: { asset: Asset }) {
       {busy ? "…" : (i18n.language === "ar" ? "▶ شاهد الآن" : "▶ Watch now")}
     </button>
     {url && <video key={url} src={url} controls playsInline preload="metadata"
-      referrerPolicy="no-referrer" className="w-full rounded-card bg-black"
+      className="w-full rounded-card bg-black"
       onError={() => setError(i18n.language === "ar" ? "تعذر تشغيل الفيديو. جرّب إرساله عبر Telegram." : "Playback failed. Try Telegram delivery.")} />}
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
   </div>;
