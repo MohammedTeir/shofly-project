@@ -149,6 +149,7 @@ class MediaAsset(Base):
     import_job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("import_jobs.id"))
     provider: Mapped[str] = mapped_column(String(32))
     provider_ref_encrypted: Mapped[str] = mapped_column(Text)
+    segment_refs_encrypted: Mapped[list | None] = mapped_column(JSON)  # ordered encrypted Telegram message references
     edition: Mapped[str | None] = mapped_column(String(32))
     quality: Mapped[str | None] = mapped_column(String(32))
     codec: Mapped[str | None] = mapped_column(String(32))

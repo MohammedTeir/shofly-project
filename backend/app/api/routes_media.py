@@ -33,6 +33,18 @@ def telegram_delivery(asset_id: uuid.UUID, user: User = Depends(current_user), d
         ref = {"chat_id": int(chat), "message_id": int(message)}
     except (ValueError, TypeError):
         raise AppError(400, "MEDIA_DELIVERY_UNSUPPORTED", "Delivery is not supported for this file.")
+    segments = []
+    for encrypted in (asset.segment_refs_encrypted or []):
+        try:
+            part_chat, part_message, _ = decrypt(encrypted).split(":", 2)
+            segments.append({"chat_id": int(part_chat), "message_id": int(part_message)})
+        except (ValueError, TypeError):
+            raise AppError(400, "MEDIA_DELIVERY_UNSUPPORTED", "Invalid segment reference.")
+    if segments and segments[0] != ref:
+        raise AppError(409, "MEDIA_SEGMENT_MISMATCH", "Segment references are inconsistent.")
+    if segments:
+        ref["parts"] = segments
+        ref["part_count"] = len(segments)
     audit(db, user.id, "media.deliver", "media_asset", asset.id, {"platform": "telegram"})
     db.commit()
     return ref

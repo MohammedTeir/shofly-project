@@ -170,7 +170,7 @@
      "duration_sec": {
       "anyOf": [
        {
-        "exclusiveMinimum": 0.0,
+        "exclusiveMinimum": 0,
         "type": "integer"
        },
        {
@@ -221,8 +221,16 @@
       ],
       "title": "Quality"
      },
+     "segment_refs": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 500,
+      "title": "Segment Refs",
+      "type": "array"
+     },
      "size_bytes": {
-      "exclusiveMinimum": 0.0,
+      "exclusiveMinimum": 0,
       "title": "Size Bytes",
       "type": "integer"
      },
@@ -257,8 +265,8 @@
       "title": "Air Date"
      },
      "episode_number": {
-      "maximum": 9999.0,
-      "minimum": 1.0,
+      "maximum": 9999,
+      "minimum": 1,
       "title": "Episode Number",
       "type": "integer"
      },
@@ -413,8 +421,8 @@
      "release_year": {
       "anyOf": [
        {
-        "maximum": 2200.0,
-        "minimum": 1888.0,
+        "maximum": 2200,
+        "minimum": 1888,
         "type": "integer"
        },
        {
@@ -502,8 +510,8 @@
       "type": "string"
      },
      "progress_percent": {
-      "maximum": 100.0,
-      "minimum": 0.0,
+      "maximum": 100,
+      "minimum": 0,
       "title": "Progress Percent",
       "type": "integer"
      },
@@ -603,8 +611,8 @@
    "SeasonIn": {
     "properties": {
      "season_number": {
-      "maximum": 999.0,
-      "minimum": 0.0,
+      "maximum": 999,
+      "minimum": 0,
       "title": "Season Number",
       "type": "integer"
      },

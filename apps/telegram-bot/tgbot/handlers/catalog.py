@@ -14,8 +14,13 @@ async def deliver_file(bot, api, session, user_id: int, asset_id: str) -> str:
         if e.status in (400, 403, 404):
             return "delivery_denied"
         raise
+    parts = ref.get("parts") or [{"chat_id": ref["chat_id"], "message_id": ref["message_id"]}]
+    if not isinstance(parts, list) or not parts or len(parts) > 500:
+        return "delivery_failed"
     try:  # copy (no 'forwarded from' header) and block forwarding/saving; not a perfect anti-copy measure
-        await bot.copy_message(chat_id=user_id, from_chat_id=ref["chat_id"], message_id=ref["message_id"], protect_content=True)
+        for part in parts:
+            await bot.copy_message(chat_id=user_id, from_chat_id=part["chat_id"],
+                                   message_id=part["message_id"], protect_content=True)
     except TelegramAPIError:
         return "delivery_failed"
     return "sending"
