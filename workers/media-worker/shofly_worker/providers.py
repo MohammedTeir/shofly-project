@@ -105,10 +105,19 @@ class MTProtoTelegramProvider:
 
         async def execute():
             Path(self.session_path).parent.mkdir(parents=True, exist_ok=True)
-            async with TelegramClient(self.session_path, self.api_id, self.api_hash) as client:
+            # Do not use 'async with TelegramClient': __aenter__ calls start()
+            # without the bot token and can prompt for a phone number in Colab.
+            client = TelegramClient(self.session_path, self.api_id, self.api_hash)
+            try:
+                await client.connect()
                 if not await client.is_user_authorized():
                     await client.start(bot_token=self.bot_token)
+                me = await client.get_me()
+                if not me or not me.bot:
+                    raise RuntimeError("MTProto session is not authenticated as a bot")
                 return await operation(client)
+            finally:
+                await client.disconnect()
 
         try:
             asyncio.get_running_loop()
