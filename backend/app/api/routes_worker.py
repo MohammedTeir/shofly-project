@@ -48,7 +48,7 @@ class CompleteIn(OwnerIn):
 
 
 class FailIn(OwnerIn):
-    error_code: str = Field(pattern=r"^[A-Z_]{3,40}$")
+    error_code: str = Field(pattern=r"^[A-Z0-9_]{3,40}$")
     error_message_safe: str | None = Field(None, max_length=300)
     retryable: bool = True
 
