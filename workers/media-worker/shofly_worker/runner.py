@@ -10,7 +10,7 @@ from shofly_worker.client import ApiError, BackendClient
 from shofly_worker.downloader import download
 from shofly_worker.aria2_downloader import download_aria2
 from shofly_worker.errors import LeaseLost, SourceExpired, WorkerError
-from shofly_worker.probe import probe, verify_media
+from shofly_worker.probe import probe, verify_media, media_extension
 from shofly_worker.segmentation import split_playable
 from shofly_worker.retention import job_dir, mark_final, cleanup, touch_active, clear_active
 
@@ -98,6 +98,12 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
             log.info("media_integrity_verified job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         check(); client.progress(jid, "UPLOADING", 60)
         source = tmp / "source.bin"
+        extension = media_extension(source)
+        if extension != ".bin":
+            named_source = tmp / ("video" + extension)
+            source.rename(named_source)
+            source = named_source
+        log.info("media_filename_prepared job_id=%s extension=%s", jid, extension)
         provider_limit = getattr(provider, "max", None)
         part_limit = getattr(settings, "segment_max_bytes", 0) or provider_limit
         if part_limit and provider_limit:
