@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 import time
 import shutil
@@ -35,7 +37,23 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
     job = client.claim()
     if job is None:
         return None
-    jid, tmp = job["id"], Path(settings.tmp_dir) / job["id"]
+    jid = job["id"]
+    persistent = bool(settings.persistent_download_dir) and settings.downloader == "aria2c"
+    tmp = Path(settings.persistent_download_dir if persistent else settings.tmp_dir) / jid
+    retain_partial = False
+    if persistent:
+        # A partial transfer may be resumed only for the exact same source.
+        marker = tmp / "source.json"
+        fingerprint = hashlib.sha256(job["source_ref"].encode()).hexdigest()
+        try:
+            old = json.loads(marker.read_text()) if marker.exists() else {}
+        except (ValueError, OSError):
+            old = {}
+        if old.get("fingerprint") != fingerprint:
+            shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"fingerprint": fingerprint}))
+
     hb = Heartbeat(client, jid, settings.heartbeat_seconds); hb.start()
     ref = None
     started = time.monotonic()
@@ -78,9 +96,11 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         log.info("job_completed job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         return "COMPLETED"
     except LeaseLost:
+        retain_partial = persistent and ref is None
         if ref: provider.delete(ref)  # someone else owns the job now; our upload is an orphan
         return "LEASE_LOST"
     except WorkerError as e:
+        retain_partial = persistent and e.retryable and ref is None
         log.warning("job_failed job_id=%s code=%s stage_elapsed_s=%.1f retryable=%s", jid, e.code, time.monotonic()-started, e.retryable)
         if ref: provider.delete(ref)
         _report(client, jid, e.code, e.message, e.retryable)
@@ -92,7 +112,8 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         return "UNEXPECTED"
     finally:
         hb.stop_evt.set()
-        shutil.rmtree(tmp, ignore_errors=True)
+        if not retain_partial:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _report(client, jid, code, msg, retryable):
