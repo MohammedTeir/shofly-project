@@ -5,11 +5,22 @@ Supports retries and partial resume; persistence depends on a mounted directory.
 """
 import hashlib
 import os
+import logging
+import re
 import subprocess
 import time
 from pathlib import Path
 
 from shofly_worker.errors import WorkerError
+
+log = logging.getLogger("shofly_worker")
+
+
+def _safe_aria2_error(output: str) -> str:
+    """Keep aria2 error codes, not source URLs, query tokens or response bodies."""
+    codes = re.findall(r"errorCode\s*=\s*(\d+)", output, flags=re.IGNORECASE)
+    return ",".join(dict.fromkeys(codes))[:80] if codes else "unknown"
+
 from shofly_worker.ssrf import UnsafeURL, check_url
 
 
@@ -41,7 +52,7 @@ def download_aria2(url: str, dest: Path, max_bytes: int, timeout: float,
         env.pop(key, None)
     try:
         proc = subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, env=env)
+                                stderr=subprocess.PIPE, env=env)
     except FileNotFoundError:
         raise WorkerError("ARIA2_UNAVAILABLE", "aria2c is not installed.", False)
     deadline = time.monotonic() + timeout
@@ -54,6 +65,8 @@ def download_aria2(url: str, dest: Path, max_bytes: int, timeout: float,
                 raise WorkerError("FILE_TOO_LARGE", "File exceeds the configured size limit.", False)
             time.sleep(0.5)
         if proc.returncode:
+            diagnostic = proc.stderr.read(65536).decode("utf-8", errors="replace") if proc.stderr else ""
+            log.warning("aria2c_failed exit_code=%s aria2_error_codes=%s", proc.returncode, _safe_aria2_error(diagnostic))
             raise WorkerError("ARIA2_DOWNLOAD_FAILED", "aria2c download failed.", True)
         if not dest.is_file() or dest.stat().st_size == 0:
             raise WorkerError("EMPTY_FILE", "Source returned no data.", False)
@@ -74,5 +87,7 @@ def download_aria2(url: str, dest: Path, max_bytes: int, timeout: float,
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+        if proc.stderr:
+            proc.stderr.close()
         # Preserve aria2 control data for retries within this worker attempt.
         # The runner owns temp directory cleanup; phase 2 will persist partial files.
