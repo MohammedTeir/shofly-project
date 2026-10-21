@@ -77,3 +77,71 @@ class TelegramProvider:
             self.http.post(f"{self.base}/deleteMessage", data={"chat_id": chat, "message_id": mid})
         except httpx.HTTPError:
             pass
+
+
+class MTProtoTelegramProvider:
+    """Telegram bot MTProto upload through Telethon. Uses a private storage channel.
+
+    Uses the same provider reference format as TelegramProvider, preserving
+    backend compatibility. Upload limit defaults to 2 GiB, subject to Telegram limits.
+    """
+    name = "telegram"
+
+    def __init__(self, api_id: int, api_hash: str, bot_token: str, chat_id: str,
+                 session_path: str, max_bytes: int = 2 * 1024**3):
+        if not api_id or not api_hash or not bot_token or not chat_id:
+            raise ValueError("MTProto API credentials and storage channel are required")
+        self.api_id, self.api_hash, self.bot_token = api_id, api_hash, bot_token
+        self.chat_id, self.session_path, self.max = int(chat_id), session_path, max_bytes
+        self._receipts = {}
+
+    def _run(self, operation):
+        import asyncio
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+        from pathlib import Path
+        async def execute():
+            Path(self.session_path).parent.mkdir(parents=True, exist_ok=True)
+            async with TelegramClient(self.session_path, self.api_id, self.api_hash) as client:
+                if not await client.is_user_authorized():
+                    await client.start(bot_token=self.bot_token)
+                return await operation(client)
+        return asyncio.run(execute())
+
+    def upload(self, local_path: Path, meta: dict) -> str:
+        size = local_path.stat().st_size
+        if size > self.max:
+            raise WorkerError("FILE_TOO_LARGE", "File exceeds configured MTProto upload limit.", False)
+        async def send(client):
+            message = await client.send_file(self.chat_id, str(local_path), force_document=True)
+            if not message or not message.file:
+                raise RuntimeError("Telegram did not return a file receipt")
+            return message.id, message.file.size, message.document.id
+        try:
+            mid, reported_size, document_id = self._run(send)
+        except Exception:
+            raise WorkerError("UPLOAD_FAILED", "MTProto upload failed.", True)
+        ref = f"{self.chat_id}:{mid}:mtproto-{document_id}"
+        self._receipts[ref] = reported_size
+        return ref
+
+    def verify(self, ref: str, size: int) -> bool:
+        if self._receipts.get(ref) != size:
+            return False
+        try:
+            mid = int(ref.split(":", 2)[1])
+            async def get(client):
+                message = await client.get_messages(self.chat_id, ids=mid)
+                return bool(message and message.file and message.file.size == size)
+            return self._run(get)
+        except Exception:
+            return False
+
+    def delete(self, ref: str) -> None:
+        try:
+            mid = int(ref.split(":", 2)[1])
+            async def remove(client):
+                await client.delete_messages(self.chat_id, [mid])
+            self._run(remove)
+        except Exception:
+            pass
