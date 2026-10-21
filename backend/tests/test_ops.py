@@ -47,3 +47,15 @@ def test_encryption_key_rotation(monkeypatch):
     from cryptography.fernet import InvalidToken
     with pytest.raises(InvalidToken):
         decrypt(blob)
+
+
+def test_bootstrap_admins_from_env_is_idempotent_and_ignores_junk(db, monkeypatch):
+    from app.core.config import get_settings
+    from app.users import bootstrap_admins
+    monkeypatch.setattr(get_settings(), "bootstrap_super_admin_telegram_ids", "111, abc,222 ,,")
+    assert bootstrap_admins(db) == [111, 222]
+    assert {u.telegram_id: u.role for u in db.query(User)} == {111: "super_admin", 222: "super_admin"}
+    assert bootstrap_admins(db) == []                       # second start: nothing to do
+    assert db.query(AuditLog).filter_by(action="user.bootstrap_role").count() == 2
+    monkeypatch.setattr(get_settings(), "bootstrap_super_admin_telegram_ids", "")
+    assert bootstrap_admins(db) == []

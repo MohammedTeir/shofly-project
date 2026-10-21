@@ -64,6 +64,8 @@ WORKER_API_TOKEN=<internal worker-to-backend secret>
 ENCRYPTION_KEY=<valid Fernet key>
 BOT_USERNAME=shofly_bot
 CORS_ORIGINS=https://shofly-mini.vercel.app,https://shofly-admin.vercel.app
+BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS=<your numeric Telegram id>   # first admin; no shell needed (see live test checklist)
+IMPORT_ALLOWED_HOSTS=<hostname(s) you are allowed to import from, e.g. shofly-mini.vercel.app>   # empty = every import is rejected
 ```
 
 `DATABASE_URL` is stored only in Render. The database is Neon PostgreSQL. Neon connection strings may be copied in standard `postgresql://...` form; the application and Alembic migration setup normalize that form to the installed Psycopg 3 driver.
@@ -83,6 +85,7 @@ API_BASE_URL=https://shofly-backend.onrender.com
 TELEGRAM_BOT_TOKEN=<same token issued by @BotFather>
 BOT_API_TOKEN=<same value configured on the backend>
 PUBLIC_APP_URL=https://shofly-mini.vercel.app
+PORT=<set automatically by Render; when present the bot also opens a tiny health listener>
 ```
 
 The bot token and the internal API token must not be confused:
@@ -120,14 +123,45 @@ dist
 
 ### Media worker
 
-The media worker is not deployed yet. The intended deployment is a Render Background Worker or another persistent worker environment. It must use:
+The media worker is not deployed yet. Run it from your own computer or Colab for now (a Render Background Worker is a separate service type; check Render's current pricing before relying on it). It needs:
 
 ```text
 API_BASE_URL=https://shofly-backend.onrender.com
 WORKER_API_TOKEN=<same value configured on the backend>
 ```
 
+Start it with `cd workers/media-worker && pip install -r requirements.txt && python -m shofly_worker`. It checks the queue, processes every claimable job, sleeps `POLL_SECONDS` (default 30) and repeats; Ctrl+C is safe (unfinished jobs are re-queued when their lease expires). Extra variables: `PROVIDER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (private storage channel id, starts with `-100`). `ffprobe` (part of ffmpeg) must be installed.
+
 The Colab worker can still be used for development; see `workers/media-worker/README.md` and `notebooks/media_worker.ipynb`.
+
+## Live test checklist (your deployment, in order)
+
+Free Render services sleep when idle: the first request can take about a minute. Open `/health/ready` on the backend first and wait for `{"status":"ready"}`.
+
+1. **Make yourself admin.** Message `@userinfobot` to get your numeric Telegram id. On the Render backend service add `BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS=<id>` and `IMPORT_ALLOWED_HOSTS=shofly-mini.vercel.app`, save, and let it redeploy. The log shows `bootstrapped super_admin for 1 telegram id(s)`.
+2. **Bot basics.** Send `/start` to `@shofly_bot`: welcome message in your language, then `/language` and switch; reopen the bot and confirm it stayed. Browse is empty ("Nothing here yet") because production has no seed data.
+3. **Mini App buttons.** In `@BotFather`: `/mybots` → shofly_bot → Bot Settings → Menu Button → URL `https://shofly-mini.vercel.app`. For the admin app run `/newapp` with `https://shofly-admin.vercel.app` and open the link it gives you (the admin app only signs in from inside Telegram; non-admins see "Access denied").
+4. **Storage channel.** Create a private channel, add `@shofly_bot` as administrator, and get the channel id (`-100…`) by forwarding a channel post to a "JSON dump" style bot such as `@JsonDumpBot` (third-party: use it only on this test channel).
+5. **Test video.** Use a short video you own (max 50 MB). Put it in `apps/mini-app/public/test.mp4`, push (Vercel redeploys), and check `https://shofly-mini.vercel.app/test.mp4` downloads. Delete it afterwards.
+6. **Admin app.** Titles → create a movie → copy its ID. Rights → New rights record (movie, that ID, license "owned", evidence "test", Telegram ticked, territory ALL, dates covering today) → **Approve**. Imports → paste the test.mp4 URL → **Create** → enter movie + ID → **Approve** (status becomes READY).
+7. **Run the worker** (your computer, see Media worker). Expected log: `cycle 1: ['COMPLETED']`. Admin → the title now lists one media file.
+8. **Publish.** Title page → **Mark metadata verified** → **Publish**.
+9. **Receive it.** In the bot search the title → **Send me the file** (or Mini App → title → **Send via Telegram**). The video arrives in your chat.
+10. **Takedown.** Admin → **Unpublish** → tap the old button again: "isn't available".
+
+| Symptom | Likely cause |
+|---|---|
+| Bot silent | service asleep/crashed: check Render bot logs for "start polling"; `TELEGRAM_BOT_TOKEN` wrong; two bot instances polling at once (local + Render) |
+| Bot says "Something went wrong" | backend asleep, or `BOT_API_TOKEN` differs between bot and backend |
+| Mini App/Admin shows network errors | `CORS_ORIGINS` missing the Vercel domain, or `VITE_API_BASE_URL` wrong |
+| Admin "Open from Telegram" | opened in a normal browser; use the Telegram link |
+| Admin "Access denied" | your id is not in `BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS`, or the backend has not redeployed |
+| Import "Source rejected" | host not in `IMPORT_ALLOWED_HOSTS`, not https, or resolves to a private address |
+| Job stuck READY | worker not running / wrong `WORKER_API_TOKEN` ("backend rejected the worker token") |
+| Job RETRY_WAIT with `PROBE_UNAVAILABLE` | ffmpeg/ffprobe not installed on the worker machine |
+| `FILE_TOO_LARGE` | over 50 MB (Telegram Bot API upload cap) |
+| Job BLOCKED_RIGHTS | rights not approved/in date/Telegram not ticked; fix, then Retry |
+| Publish "Cannot publish yet" | the list shows which of metadata / file / rights is missing |
 
 ## Local development
 
@@ -218,12 +252,14 @@ The Telegram bot was first validated with Telegram's `getMe` endpoint. An earlie
 
 CORS was configured for both Vercel domains. The bot service received a small HTTP health listener so it could run on Render's Web Service runtime while continuing to use Telegram long polling.
 
+Later fixes: the bot health listener now sends a computed `Content-Length`, and only opens a port when `PORT` is set (Render sets it, local runs do not); the backend image listens on `$PORT` (default 8000); `BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS` lets you create the first admin without a shell; the worker gained `python -m shofly_worker`.
+
 ## Remaining work
 
-- Deploy the media worker as a Render Background Worker or persistent worker service.
+- Run the media worker (your computer/Colab now; a persistent host later).
 - Test the complete flow in Telegram: `/start`, browsing, search, favorites, Mini App opening, and backend authorization.
 - Configure Neon backups, branches, and production connection settings as needed.
-- Upgrade Render from the Free plan for reliable always-on bot operation. Free services can spin down after inactivity and are intended for testing.
+- Free Render services spin down after inactivity, and a polling bot cannot wake itself. Either upgrade the bot service, or switch the bot to Telegram webhook mode (a request then wakes it; not built yet, recommended next).
 - Implement remaining specification items: Gemini/TMDB matching, content requests, subscriptions/Stars, web playback or object storage, watch progress, webhook mode, deep links, notifications, and production monitoring.
 
 ## Security reminders

@@ -9,4 +9,4 @@ RUN useradd --system --uid 10001 app && chown -R app /srv
 USER app
 EXPOSE 8000
 # Migrations run on every start (idempotent). For multiple replicas, run them as a separate one-off job instead.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"]

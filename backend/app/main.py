@@ -17,6 +17,15 @@ async def lifespan(_):
     # Development convenience only. Production must use Alembic migrations (pending).
     if get_settings().app_env == "development":
         Base.metadata.create_all(engine)
+    try:  # operator-controlled first-admin bootstrap; never block startup on it
+        from app.core.db import SessionLocal
+        from app.users import bootstrap_admins
+        with SessionLocal() as db:
+            promoted = bootstrap_admins(db)
+        if promoted:
+            logging.getLogger("shofly").info("bootstrapped super_admin for %d telegram id(s)", len(promoted))
+    except Exception:  # noqa: BLE001
+        logging.getLogger("shofly").exception("admin bootstrap failed")
     yield
 
 

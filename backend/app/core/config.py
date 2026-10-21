@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     retry_backoff_seconds: int = 60
     bot_username: str | None = None
     billing_enabled: bool = False
+    bootstrap_super_admin_telegram_ids: str = ""
     bot_api_token: str | None = None
     default_language: str = "ar"
     supported_languages: str = "ar,en"
@@ -30,6 +31,15 @@ class Settings(BaseSettings):
     @property
     def import_hosts(self) -> set[str]:
         return {x.strip().lower() for x in self.import_allowed_hosts.split(",") if x.strip()}
+
+    @property
+    def bootstrap_admin_ids(self) -> list[int]:
+        out = []
+        for x in self.bootstrap_super_admin_telegram_ids.split(","):
+            x = x.strip()
+            if x.lstrip("-").isdigit():
+                out.append(int(x))
+        return out
 
     @property
     def languages(self) -> list[str]:

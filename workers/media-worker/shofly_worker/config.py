@@ -14,5 +14,6 @@ class WorkerSettings(BaseSettings):
     max_bytes: int = 50 * 1024 * 1024            # Bot API upload cap; raise only with a local Bot API server
     download_timeout: int = 1800
     heartbeat_seconds: int = 60
+    poll_seconds: int = 30                       # pause between queue checks when idle (CLI loop)
     tmp_dir: str = "/tmp/shofly"
     allowed_hosts: str = ""                      # optional extra allowlist (comma separated)

@@ -13,11 +13,11 @@ from app.core.db import get_db
 from app.core.errors import AppError
 from app.models import (ContentRight, Episode, ImportJob, LocalizedMetadata, MediaAsset, Movie, Season, TvSeries, User)
 from app.publishing import blockers, deliverable_episode_ids
+from app.users import ROLES
 
 router = APIRouter(prefix="/admin")
 staff = require_role("content_admin", "super_admin")
 Kind = Literal["movie", "series"]
-ROLES = {"member", "moderator", "content_admin", "rights_admin", "super_admin"}
 
 
 def _item(db: Session, kind: str, item_id: uuid.UUID):

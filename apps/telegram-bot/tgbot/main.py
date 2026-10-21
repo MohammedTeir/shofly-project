@@ -34,11 +34,15 @@ async def set_commands(bot: Bot):
                                   language_code=code)
 
 
+HEALTH_BODY = b'{"status":"ok"}'
+
+
 async def health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """Tiny HTTP responder so web-service hosts (Render) see an open port. The bot itself uses long polling."""
     try:
         await reader.readline()
-        response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"
-        writer.write(response)
+        head = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(HEALTH_BODY)
+        writer.write(head + HEALTH_BODY)
         await writer.drain()
     finally:
         writer.close()
@@ -51,19 +55,18 @@ async def main():
     api = BotApi(s.api_base_url, s.bot_api_token)
     bot = Bot(s.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = build_dispatcher(api, s)
-    health_server = await asyncio.start_server(
-        health_handler, "0.0.0.0", int(os.getenv("PORT", "10000"))
-    )
+    port = os.getenv("PORT")  # set by Render & similar hosts; locally no port is opened
+    health_server = await asyncio.start_server(health_handler, "0.0.0.0", int(port)) if port else None
     await set_commands(bot)
     try:
-        async with health_server:
-            await asyncio.gather(
-                dp.start_polling(bot),
-                health_server.serve_forever(),
-            )
+        tasks = [dp.start_polling(bot)]
+        if health_server:
+            tasks.append(health_server.serve_forever())
+        await asyncio.gather(*tasks)
     finally:
-        health_server.close()
-        await health_server.wait_closed()
+        if health_server:
+            health_server.close()
+            await health_server.wait_closed()
         await api.close()
         await bot.session.close()
 

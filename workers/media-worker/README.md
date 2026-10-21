@@ -1,5 +1,7 @@
 # Shofly media worker
 
+Run: `python -m shofly_worker` (env: API_BASE_URL, WORKER_API_TOKEN, PROVIDER, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, POLL_SECONDS).
+
 Claims READY import jobs from the backend, downloads from authorized HTTPS sources, runs ffprobe, uploads to a provider,
 verifies, then reports completion. Use `notebooks/media_worker.ipynb` in Colab, or run locally:
 `pip install -r requirements.txt` then a small script using `shofly_worker.runner.run_until_empty`. Tests: `python -m pytest -q`
