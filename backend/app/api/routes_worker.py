@@ -37,6 +37,7 @@ class CompleteIn(OwnerIn):
     verified: bool
     provider: str = Field(min_length=2, max_length=32)
     provider_ref: str = Field(min_length=1, max_length=500)
+    segment_refs: list[str] = Field(default_factory=list, max_length=500)
     size_bytes: int = Field(gt=0)
     checksum_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     duration_sec: int | None = Field(None, gt=0)
@@ -93,13 +94,19 @@ def complete(jid: uuid.UUID, body: CompleteIn, db: Session = Depends(get_db)):
         job.error_code, job.error_message_safe = "RIGHTS_NOT_APPROVED", "Rights missing, expired or revoked."
         db.commit()
         raise AppError(409, "BLOCKED_RIGHTS", "Rights are not valid; the asset was not attached.")
+    if any(not ref or len(ref) > 500 for ref in body.segment_refs):
+        raise AppError(400, "INVALID_SEGMENTS", "Invalid segment references.")
+    if body.segment_refs and body.segment_refs[0] != body.provider_ref:
+        raise AppError(400, "INVALID_SEGMENTS", "First segment must match primary reference.")
     col = MediaAsset.movie_id if job.candidate_kind == "movie" else MediaAsset.episode_id
     dup = db.scalar(select(MediaAsset).where(col == job.target_id, MediaAsset.checksum_sha256 == body.checksum_sha256))
     if dup:  # same bytes already attached to this target: never create a second asset
         asset, duplicate = dup, True
     else:
         asset = MediaAsset(id=uuid.uuid4(), import_job_id=job.id, provider=body.provider,
-                           provider_ref_encrypted=encrypt(body.provider_ref), size_bytes=body.size_bytes,
+                           provider_ref_encrypted=encrypt(body.provider_ref),
+                           segment_refs_encrypted=[encrypt(ref) for ref in body.segment_refs] if body.segment_refs else None,
+                           size_bytes=body.size_bytes,
                            checksum_sha256=body.checksum_sha256, duration_sec=body.duration_sec, quality=body.quality,
                            codec=body.codec, audio_language=body.audio_language, edition=body.edition,
                            upload_status="verified", visibility="private",
