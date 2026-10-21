@@ -1,4 +1,5 @@
 import logging
+import time
 import shutil
 import threading
 from pathlib import Path
@@ -36,6 +37,8 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
     jid, tmp = job["id"], Path(settings.tmp_dir) / job["id"]
     hb = Heartbeat(client, jid, settings.heartbeat_seconds); hb.start()
     ref = None
+    started = time.monotonic()
+    log.info("job_started job_id=%s", jid)
 
     def check():
         if hb.lost.is_set():
@@ -46,10 +49,13 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         hosts = {h.strip().lower() for h in settings.allowed_hosts.split(",") if h.strip()} or None
         size, sha = download(job["source_ref"], tmp / "source.bin", dl_http, settings.max_bytes, settings.download_timeout,
                              hosts, resolver, check)
+        log.info("download_complete job_id=%s bytes=%s elapsed_s=%.1f", jid, size, time.monotonic()-started)
         check(); client.progress(jid, "PROBING", 40)
         info = probe_fn(tmp / "source.bin")
+        log.info("probe_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         check(); client.progress(jid, "UPLOADING", 60)
         ref = provider.upload(tmp / "source.bin", info)
+        log.info("upload_complete job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         check(); client.progress(jid, "VERIFYING", 85)
         if not provider.verify(ref, size):
             raise WorkerError("VERIFY_FAILED", "Uploaded file could not be verified.", True)
@@ -61,11 +67,13 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                 provider.delete(ref)  # never leave unlicensed media in storage
                 return "BLOCKED_RIGHTS"
             raise
+        log.info("job_completed job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         return "COMPLETED"
     except LeaseLost:
         if ref: provider.delete(ref)  # someone else owns the job now; our upload is an orphan
         return "LEASE_LOST"
     except WorkerError as e:
+        log.warning("job_failed job_id=%s code=%s stage_elapsed_s=%.1f retryable=%s", jid, e.code, time.monotonic()-started, e.retryable)
         if ref: provider.delete(ref)
         _report(client, jid, e.code, e.message, e.retryable)
         return e.code
