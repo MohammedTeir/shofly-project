@@ -79,7 +79,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         hosts = {h.strip().lower() for h in settings.allowed_hosts.split(",") if h.strip()} or None
         mode = getattr(settings, "downloader", "httpx").lower()
         if mode == "aria2c" and hosts:
-            size, sha = download_aria2(job["source_ref"], tmp / "source.bin", settings.max_bytes,
+            size, sha = download_aria2(job["source_ref"], tmp / "source.bin", getattr(settings, "download_max_bytes", settings.max_bytes),
                                       settings.download_timeout, hosts, check,
                                       settings.aria2_connections, settings.aria2_retries)
         elif mode in ("httpx", "aria2c"):
