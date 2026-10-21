@@ -6,6 +6,10 @@ import app.models  # noqa: F401
 
 config = context.config
 url = config.get_main_option("sqlalchemy.url") or get_settings().database_url
+if url.startswith("postgresql://"):
+    url = "postgresql+psycopg://" + url[len("postgresql://"):]
+elif url.startswith("postgres://"):
+    url = "postgresql+psycopg://" + url[len("postgres://"):]
 target_metadata = Base.metadata
 
 
