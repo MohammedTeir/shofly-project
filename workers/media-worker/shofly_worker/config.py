@@ -11,7 +11,8 @@ class WorkerSettings(BaseSettings):
     local_dir: str = "./stored"
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None          # private storage channel id
-    max_bytes: int = 50 * 1024 * 1024            # Bot API upload cap; raise only with a local Bot API server
+    max_bytes: int = 50 * 1024 * 1024            # legacy default download ceiling and hosted Bot API upload cap
+    download_max_bytes: int = 8 * 1024 * 1024 * 1024  # source download cap, independent of per-part upload cap
     download_timeout: int = 1800
     heartbeat_seconds: int = 60
     poll_seconds: int = 30                       # pause between queue checks when idle (CLI loop)
