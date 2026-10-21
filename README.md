@@ -1,21 +1,234 @@
 # Shofly | شوفلي — Telegram media library
 
-backend/ FastAPI + PostgreSQL (SQLite for dev) · apps/telegram-bot (aiogram) · apps/mini-app (Shofly) ·
-apps/admin-dashboard (Shofly Admin) · workers/media-worker + notebooks/media_worker.ipynb (Colab) · specification: TML-MPS-001 v2.1
+Shofly is a Telegram-first media library consisting of a FastAPI backend, an aiogram Telegram bot, a Vite Mini App, an admin dashboard, and a background media worker. The project specification is TML-MPS-001 v2.1.
 
-## Flow
-1. Admin creates a title, adds a rights record (rights admin approves), submits an authorized import link and approves it for the title.
-2. The Colab worker downloads, probes, uploads to the private Telegram channel, verifies, reports completion.
-3. Admin marks metadata verified and publishes (blocked unless: metadata verified + verified file + approved, in-date rights).
-4. Members see the title. "Send via Telegram" (Mini App) or the bot button re-checks rights/platform/territory/entitlement
-   on every request, then the bot copies the file into the user's chat with forwarding disabled.
-Takedown: unpublish, revoke rights, or let the license expire: delivery stops on the next request.
+## Current deployment
 
-## Local run
-backend: `cp .env.example .env` (fill secrets) · `alembic upgrade head` · `python -m scripts.seed` (DEV fixtures) · `uvicorn app.main:app`
-bot: `python -m tgbot.main` · apps: `npm install && npm run dev` · worker: see workers/media-worker/README.md
-Tests: `python -m pytest -q` in backend, apps/telegram-bot, workers/media-worker; `npm test` in both web apps.
+The current development deployment is online:
 
-## Not built yet (see spec)
-Gemini/TMDB matching (M3), content requests (REQ), subscriptions/Stars (M7), web playback/object storage, watch progress,
-Telegram webhook mode, deployment/CI/monitoring (M8), live-Telegram verification of the bot and Telegram storage provider.
+- Mini App: <https://shofly-mini.vercel.app>
+- Admin Dashboard: <https://shofly-admin.vercel.app>
+- Backend: <https://shofly-backend.onrender.com>
+- Backend live check: <https://shofly-backend.onrender.com/health/live>
+- Backend ready check: <https://shofly-backend.onrender.com/health/ready>
+- Telegram bot: [@shofly_bot](https://t.me/shofly_bot)
+- Telegram bot Render service: <https://shofly-telegram-bot.onrender.com>
+
+The Mini App, admin dashboard, backend, and bot service have all been publicly checked. The backend health endpoints return `{"status":"ok"}` and `{"status":"ready"}`.
+
+The bot currently runs long polling on Render. Its Render service includes a small HTTP health listener because Render Web Services expect an HTTP port. The bot logs confirm that it starts polling as `@shofly_bot` and can authenticate with the backend.
+
+## Architecture and request flow
+
+```text
+Telegram
+   │ TELEGRAM_BOT_TOKEN
+   ▼
+Telegram bot service
+   │ BOT_API_TOKEN
+   ▼
+FastAPI backend ───────► Neon PostgreSQL
+   ▲ WORKER_API_TOKEN
+   │
+Media worker
+
+Mini App ───────────────► FastAPI backend
+Admin Dashboard ────────► FastAPI backend
+```
+
+The main content flow is:
+
+1. An admin creates a title and adds a rights record.
+2. An authorized import link is submitted and approved for the title.
+3. The media worker downloads, probes, and uploads the file to the private Telegram channel.
+4. The admin verifies metadata and publishes the title.
+5. Members browse the catalog through the Mini App or Telegram bot.
+6. Each delivery request re-checks rights, platform, territory, and entitlement.
+7. Takedown, rights revocation, or license expiry stops delivery on the next request.
+
+## Services and environment variables
+
+### Backend: `shofly-backend`
+
+The backend is a Render Docker Web Service using the `backend/` Docker context. It runs database migrations before starting FastAPI.
+
+Important variables:
+
+```text
+APP_ENV=production
+DATABASE_URL=postgresql+psycopg://...
+TELEGRAM_BOT_TOKEN=<token from @BotFather>
+JWT_SIGNING_KEY=<random signing secret>
+BOT_API_TOKEN=<internal bot-to-backend secret>
+WORKER_API_TOKEN=<internal worker-to-backend secret>
+ENCRYPTION_KEY=<valid Fernet key>
+BOT_USERNAME=shofly_bot
+CORS_ORIGINS=https://shofly-mini.vercel.app,https://shofly-admin.vercel.app
+```
+
+`DATABASE_URL` is stored only in Render. The database is Neon PostgreSQL. Neon connection strings may be copied in standard `postgresql://...` form; the application and Alembic migration setup normalize that form to the installed Psycopg 3 driver.
+
+### Telegram bot: `shofly-telegram-bot`
+
+The bot is deployed as a Render Web Service running:
+
+```text
+cd apps/telegram-bot && python -m tgbot.main
+```
+
+It uses:
+
+```text
+API_BASE_URL=https://shofly-backend.onrender.com
+TELEGRAM_BOT_TOKEN=<same token issued by @BotFather>
+BOT_API_TOKEN=<same value configured on the backend>
+PUBLIC_APP_URL=https://shofly-mini.vercel.app
+```
+
+The bot token and the internal API token must not be confused:
+
+- `TELEGRAM_BOT_TOKEN` authenticates the bot with Telegram and is issued by `@BotFather`.
+- `BOT_API_TOKEN` authenticates the bot when it calls the Shofly backend and is generated by the project owner.
+- `WORKER_API_TOKEN` authenticates the media worker when it calls the Shofly backend.
+
+### Frontends
+
+Both Vercel frontends use:
+
+```text
+VITE_API_BASE_URL=https://shofly-backend.onrender.com
+```
+
+Vercel project root directories:
+
+```text
+apps/mini-app
+apps/admin-dashboard
+```
+
+Build command:
+
+```text
+npm run build
+```
+
+Output directory:
+
+```text
+dist
+```
+
+### Media worker
+
+The media worker is not deployed yet. The intended deployment is a Render Background Worker or another persistent worker environment. It must use:
+
+```text
+API_BASE_URL=https://shofly-backend.onrender.com
+WORKER_API_TOKEN=<same value configured on the backend>
+```
+
+The Colab worker can still be used for development; see `workers/media-worker/README.md` and `notebooks/media_worker.ipynb`.
+
+## Local development
+
+### Backend
+
+```bash
+cd backend
+cp .env.example .env
+# Fill the required secrets in .env
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head
+python -m scripts.seed       # development fixtures only
+uvicorn app.main:app --reload
+```
+
+The default local database is SQLite. PostgreSQL is recommended for deployed environments.
+
+### Telegram bot
+
+```bash
+cd apps/telegram-bot
+pip install -r requirements.txt
+cp .env.example .env
+python -m tgbot.main
+```
+
+The local bot requires `TELEGRAM_BOT_TOKEN`, `BOT_API_TOKEN`, and `API_BASE_URL`.
+
+### Frontends
+
+```bash
+cd apps/mini-app
+npm install
+npm run dev
+
+cd ../admin-dashboard
+npm install
+npm run dev
+```
+
+### Tests
+
+```bash
+cd backend && python -m pytest -q
+cd apps/telegram-bot && python -m pytest -q
+cd workers/media-worker && python -m pytest -q
+cd apps/mini-app && npm test
+cd apps/admin-dashboard && npm test
+```
+
+## Secret generation
+
+Generate an internal API token with Python:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Generate a JWT signing key:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+Generate a valid Fernet encryption key:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Never commit secret values to GitHub or put them in the README. When rotating `BOT_API_TOKEN`, update both the backend and bot service. When rotating `WORKER_API_TOKEN`, update both the backend and worker service. Do not casually rotate `JWT_SIGNING_KEY` or `ENCRYPTION_KEY` in production because existing sessions or encrypted data may become unusable.
+
+## Deployment and debugging history
+
+The repository was published as a private GitHub repository at `MohammedTeir/shofly-project`, with `main` as the deployment branch.
+
+The initial Render backend deployment failed because Alembic could not import the `app` package from the container. The Dockerfile was fixed by setting `PYTHONPATH=/srv`.
+
+The first Render database reference was not expanded correctly and appeared at runtime as `${{shofly-db.DATABASE_URL}}`. For development testing, the service was temporarily configured with SQLite. It was later switched to Neon PostgreSQL through the Render `DATABASE_URL` environment variable.
+
+The Neon URL initially caused SQLAlchemy to select `psycopg2`, which was not installed. The backend database setup and Alembic migration setup were updated to normalize `postgresql://` and `postgres://` URLs to `postgresql+psycopg://`. This fixed both application startup and migrations.
+
+GitHub Actions initially failed in the migration job for the same Python import-path reason. The CI workflow was updated with `PYTHONPATH=${{ github.workspace }}/backend`. The frontend builds, frontend tests, backend tests, secret scan, and the corrected migration job now pass.
+
+The Telegram bot was first validated with Telegram's `getMe` endpoint. An earlier token returned `401 Unauthorized` and was not used. A replacement token was accepted by Telegram and configured in Render. The bot service now starts polling as `@shofly_bot` and successfully authenticates with the backend.
+
+CORS was configured for both Vercel domains. The bot service received a small HTTP health listener so it could run on Render's Web Service runtime while continuing to use Telegram long polling.
+
+## Remaining work
+
+- Deploy the media worker as a Render Background Worker or persistent worker service.
+- Test the complete flow in Telegram: `/start`, browsing, search, favorites, Mini App opening, and backend authorization.
+- Configure Neon backups, branches, and production connection settings as needed.
+- Upgrade Render from the Free plan for reliable always-on bot operation. Free services can spin down after inactivity and are intended for testing.
+- Implement remaining specification items: Gemini/TMDB matching, content requests, subscriptions/Stars, web playback or object storage, watch progress, webhook mode, deep links, notifications, and production monitoring.
+
+## Security reminders
+
+- Never commit `.env` files, database URLs, Telegram tokens, or internal API tokens.
+- Revoke temporary Telegram tokens through `@BotFather` after testing.
+- Keep `TELEGRAM_BOT_TOKEN`, `BOT_API_TOKEN`, and `WORKER_API_TOKEN` as separate secrets.
+- Use Neon PostgreSQL rather than local SQLite for deployed data because Render service files are ephemeral.
