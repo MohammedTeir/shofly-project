@@ -1,9 +1,7 @@
 """Shofly Telegram-backed streaming gateway. Deploy separately from the API."""
-import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
-from urllib.parse import quote
 from uuid import UUID
 
 import httpx
@@ -49,10 +47,13 @@ async def stream(asset_id: UUID, request: Request, ticket: str = ""):
         raise HTTPException(403)
     if not ticket or len(ticket) > 4096:
         raise HTTPException(401)
-    response = await http.post(
-        f"{API}/api/v1/media/{asset_id}/stream-authorize",
-        json={"ticket": ticket}, headers={"X-Streaming-Secret": SECRET},
-    )
+    try:
+        response = await http.post(
+            f"{API}/api/v1/media/{asset_id}/stream-authorize",
+            json={"ticket": ticket}, headers={"X-Streaming-Secret": SECRET},
+        )
+    except httpx.HTTPError:
+        raise HTTPException(503, "Authorization service unavailable")
     if response.status_code != 200:
         raise HTTPException(403 if response.status_code in (401, 403, 404) else 503)
     ref = response.json()
