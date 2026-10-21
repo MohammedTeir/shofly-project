@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     billing_enabled: bool = False
     bootstrap_super_admin_telegram_ids: str = ""
     bot_api_token: str | None = None
+    streaming_gateway_url: str | None = None
+    streaming_signing_key: str | None = None
+    streaming_internal_secret: str | None = None
     default_language: str = "ar"
     supported_languages: str = "ar,en"
 
