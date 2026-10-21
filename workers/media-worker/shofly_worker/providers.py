@@ -153,12 +153,10 @@ class MTProtoTelegramProvider:
                 from shofly_worker.parallel_upload import upload_parallel
                 try:
                     uploaded = await upload_parallel(client, local_path, self.parallel_workers)
-                    message = await client.send_file(
-                        self.chat_id, uploaded, force_document=True
-                    )
                 except Exception as exc:
                     log.warning("parallel_upload_failed exception_type=%s falling_back=sequential", type(exc).__name__)
-                    # Re-upload from scratch using Telethon's supported path.
+                    # Only fall back when uploading parts fails. A send_file error
+                    # must not trigger another send and duplicate a channel post.
                     progress = TransferProgress("upload")
                     progress.start(size)
                     message = await client.send_file(
@@ -166,6 +164,10 @@ class MTProtoTelegramProvider:
                         progress_callback=lambda sent, total: progress.update(sent)
                     )
                     progress.finish(size)
+                else:
+                    message = await client.send_file(
+                        self.chat_id, uploaded, force_document=True
+                    )
             else:
                 progress = TransferProgress("upload")
                 progress.start(size)
