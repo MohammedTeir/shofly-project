@@ -1,9 +1,12 @@
 import shutil
+import logging
 import uuid
 from pathlib import Path
 from typing import Protocol
 import httpx
 from shofly_worker.errors import WorkerError
+
+log = logging.getLogger("shofly_worker")
 
 
 class MediaProvider(Protocol):
@@ -139,8 +142,10 @@ class MTProtoTelegramProvider:
             return message.id, message.file.size, message.document.id
         try:
             mid, reported_size, document_id = self._run(send)
-        except Exception:
-            raise WorkerError("UPLOAD_FAILED", "MTProto upload failed.", True)
+        except Exception as exc:
+            # Avoid exception messages: Telethon may include sensitive identifiers.
+            log.warning("mtproto_upload_failed exception_type=%s", type(exc).__name__)
+            raise WorkerError("UPLOAD_FAILED", "MTProto upload failed.", True) from exc
         ref = f"{self.chat_id}:{mid}:mtproto-{document_id}"
         self._receipts[ref] = reported_size
         return ref
