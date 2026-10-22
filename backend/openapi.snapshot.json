@@ -101,6 +101,32 @@
         "title": "ClaimIn",
         "type": "object"
       },
+      "CleanupResultIn": {
+        "properties": {
+          "error_code": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z0-9_]{3,40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "title": "CleanupResultIn",
+        "type": "object"
+      },
       "CollectionIn": {
         "properties": {
           "movie_ids": {
@@ -3453,6 +3479,99 @@
           }
         ],
         "summary": "Series"
+      }
+    },
+    "/api/v1/worker/cleanup/claim": {
+      "post": {
+        "description": "Claim one pending asset; encrypted storage references never reach the dashboard.",
+        "operationId": "claim_cleanup_api_v1_worker_cleanup_claim_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-worker-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Worker-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Cleanup"
+      }
+    },
+    "/api/v1/worker/cleanup/{asset_id}/finish": {
+      "post": {
+        "operationId": "finish_cleanup_api_v1_worker_cleanup__asset_id__finish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupResultIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finish Cleanup"
       }
     },
     "/api/v1/worker/jobs/claim": {
