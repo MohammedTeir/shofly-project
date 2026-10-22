@@ -158,3 +158,34 @@ def test_httpx_parallel_rejects_invalid_ranges(tmp_path):
                           resolver=PUBLIC, connections=4, chunk_size=1048576)
     assert exc.value.code == "INVALID_RANGE"
     assert not (tmp_path / "bad.bin").exists()
+
+
+def test_transcode_ladder_never_upscales(tmp_path, monkeypatch):
+    from shofly_worker import transcode
+    calls = []
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        output = Path(cmd[-1])
+        output.write_bytes(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+    monkeypatch.setattr(transcode.subprocess, "run", fake_run)
+    src = tmp_path / "original.mp4"
+    src.write_bytes(b"original")
+    assert [quality for quality, _ in transcode.generate_variants(src, tmp_path / "q", 1080)] == ["720p", "480p", "360p"]
+    assert len(calls) == 3
+    assert all("-movflags" in cmd and "+faststart" in cmd for cmd in calls)
+    calls.clear()
+    assert [quality for quality, _ in transcode.generate_variants(src, tmp_path / "q2", 480)] == ["360p"]
+    assert len(calls) == 1
+
+
+def test_transcode_failure_removes_partial_output(tmp_path, monkeypatch):
+    from shofly_worker import transcode
+    def bad_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"partial")
+        return subprocess.CompletedProcess(cmd, 1, b"", b"bad")
+    monkeypatch.setattr(transcode.subprocess, "run", bad_run)
+    with pytest.raises(WorkerError) as exc:
+        list(transcode.generate_variants(tmp_path / "source.mp4", tmp_path / "out", 720))
+    assert exc.value.code == "TRANSCODE_FAILED"
+    assert not (tmp_path / "out" / "480p.mp4").exists()
