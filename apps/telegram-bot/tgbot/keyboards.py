@@ -46,7 +46,9 @@ def back_row(lang: str, data: str) -> list[B]:
 def detail_kb(item: dict, lang: str) -> M:
     kind, iid = item["kind"], str(item["id"])
     fav = item.get("favorited", False)
-    rows = [[B(text=f"{t(lang, 'send_file')} ({asset_label(a)})", callback_data=cb.dl_cb(str(a["id"])))] for a in item.get("assets", [])[:4]]
+    rows = []
+    if item.get("assets"):
+        rows.append([B(text="🎞 اختر جودة الفيلم" if lang == "ar" else "🎞 Choose video quality", callback_data=cb.quality_cb(kind, iid))])
     rows.append([B(text=t(lang, "fav_remove" if fav else "fav_add"), callback_data=cb.fav_cb(kind, iid, not fav))])
     for s in item.get("seasons", []):
         n = s["season_number"]
@@ -57,6 +59,18 @@ def detail_kb(item: dict, lang: str) -> M:
 
 
 def episodes_kb(lang: str, data: dict, back_data: str) -> M:
-    rows = [[B(text=f"📥 {data['season_number'] and 'S' + str(data['season_number']) or '★'}E{e['episode_number']} · {asset_label(e['assets'][0])}",
-               callback_data=cb.dl_cb(str(e["assets"][0]["id"])))] for e in data["episodes"] if e.get("assets")][:40]
+    rows = [[B(text=f"🎬 {data['season_number'] and 'S' + str(data['season_number']) or '★'}E{e['episode_number']} · {e.get('title') or 'Episode'}"[:60],
+               callback_data=cb.episode_quality_cb(str(e["id"])))] for e in data["episodes"] if e.get("assets")][:40]
     return M(inline_keyboard=rows + [back_row(lang, back_data)])
+
+
+def quality_kb(assets: list[dict], lang: str, back_data: str) -> M:
+    """One button per verified, deliverable quality; sizes are real stored bytes."""
+    def height(a):
+        import re
+        m = re.fullmatch(r"(\\d+)p", str(a.get("quality") or ""))
+        return int(m.group(1)) if m else 0
+    ordered = sorted(assets, key=lambda a: (height(a), a.get("size_bytes") or 0), reverse=True)
+    rows = [[B(text=f"📥 {asset_label(a) or ('نسخة الفيديو' if lang == 'ar' else 'Video file')}", callback_data=cb.dl_cb(str(a["id"])))] for a in ordered[:12]]
+    rows.append(back_row(lang, back_data))
+    return M(inline_keyboard=rows)
