@@ -151,7 +151,9 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                 from shofly_worker.probe import probe as real_probe
                 height = int(str(info.get("quality") or "0p").removesuffix("p"))
                 for quality, variant_path in generate_variants(
-                    source, tmp / "qualities", height, getattr(settings, "transcode_timeout", 7200)
+                    source, tmp / "qualities", height, getattr(settings, "transcode_timeout", 7200),
+                    check=check,
+                    on_error=lambda q, code: log.warning("quality_transcode_failed job_id=%s quality=%s code=%s", jid, q, code)
                 ):
                     variant_refs = []
                     registered = False
