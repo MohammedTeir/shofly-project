@@ -110,3 +110,9 @@ def test_telegram_provider_with_mock_api(tmp_path):
     with pytest.raises(WorkerError) as e:
         TelegramProvider("T", "-100", max_bytes=10, http=httpx.Client(transport=httpx.MockTransport(handler))).upload(src, {})
     assert e.value.code == "FILE_TOO_LARGE" and not e.value.retryable
+
+
+def test_userdrive_8443_worker_exception_and_other_hosts_blocked():
+    check_url("https://d900.userdrive.org:8443/d/example", resolver=PUBLIC)
+    with pytest.raises(UnsafeURL):
+        check_url("https://other.userdrive.org:8443/d/example", resolver=PUBLIC)
