@@ -212,12 +212,14 @@ def delete_movie_all(item_id: uuid.UUID, admin: User = Depends(staff), db: Sessi
         raise AppError(409, "UNSUPPORTED_PROVIDER", "Non-Telegram storage requires manual cleanup.")
     movie.status = "deleting"
     for a in assets:
-        if a.upload_status not in ("deleted", "cleanup_processing"):
+        if a.upload_status not in ("deleted", "cleaning"):
             a.upload_status = "cleanup_pending"
     audit(db, admin.id, "movie.delete_all_requested", "movie", item_id,
           {"assets": len(assets), "jobs": len(jobs)})
+    if not assets:
+        finalize_deleted_movie(db, item_id)
     db.commit()
-    return {"status": "deleting", "assets": len(assets), "jobs": len(jobs),
+    return {"status": "deleting" if assets else "deleted", "assets": len(assets), "jobs": len(jobs),
             "message": "Run MTProto worker to remove Telegram files and finalize deletion."}
 
 
