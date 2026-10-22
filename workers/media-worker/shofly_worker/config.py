@@ -31,6 +31,8 @@ class WorkerSettings(BaseSettings):
     mtproto_max_bytes: int = 2 * 1024 * 1024 * 1024
     mtproto_parallel_workers: int = 16  # total upload tasks: 4 per connection
     mtproto_connections: int = 4  # independent MTProto clients
+    generate_qualities: bool = False  # opt-in; FFmpeg CPU, disk and Telegram uploads are costly
+    transcode_timeout: int = 7200
     split_large_media: bool = False
     segment_max_bytes: int = 0  # 0 means provider's own max size
     persistent_download_dir: str = ""  # optional mounted storage for partial transfers
