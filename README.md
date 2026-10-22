@@ -1,278 +1,266 @@
-# Shofly | شوفلي — Telegram media library
+# Shofly | شوفلي
 
-Shofly is a Telegram-first media library consisting of a FastAPI backend, an aiogram Telegram bot, a Vite Mini App, an admin dashboard, and a background media worker. The project specification is TML-MPS-001 v2.1.
+**Telegram-first movie and TV library** with an admin dashboard, Telegram Mini App, FastAPI backend, PostgreSQL, and an on-demand Google Colab media worker.
 
-## Current deployment
+> **Project status (October 2026):** Active development. The repository includes working import, rights, catalog, Telegram storage, cleanup, and parallel-transfer implementations. Production end-to-end reliability, performance and latest CI status must be verified independently. Only import or distribute media for which you have the necessary rights.
 
-The current development deployment is online:
+## Applications and deployment
 
-- Mini App: <https://shofly-mini.vercel.app>
-- Admin Dashboard: <https://shofly-admin.vercel.app>
-- Backend: <https://shofly-backend.onrender.com>
-- Backend live check: <https://shofly-backend.onrender.com/health/live>
-- Backend ready check: <https://shofly-backend.onrender.com/health/ready>
-- Telegram bot: [@shofly_bot](https://t.me/shofly_bot)
-- Telegram bot Render service: <https://shofly-telegram-bot.onrender.com>
+| Component | Technology | Deployment |
+| --- | --- | --- |
+| Backend/API | FastAPI, SQLAlchemy, Alembic | [Render](https://shofly-backend.onrender.com) |
+| Database | PostgreSQL | Neon (connection secret on Render) |
+| Telegram bot | aiogram | [@shofly_bot](https://t.me/shofly_bot), Render |
+| Mini App | Vite frontend | [shofly-mini.vercel.app](https://shofly-mini.vercel.app) |
+| Admin Dashboard | Vite frontend | [shofly-admin.vercel.app](https://shofly-admin.vercel.app) |
+| Media worker | Python, HTTPX, ffprobe/ffmpeg, Telethon | Google Colab or local Python |
+| File storage | Private Telegram channel | MTProto upload by worker |
 
-The Mini App, admin dashboard, backend, and bot service have all been publicly checked. The backend health endpoints return `{"status":"ok"}` and `{"status":"ready"}`.
+Backend health: [live](https://shofly-backend.onrender.com/health/live) · [ready](https://shofly-backend.onrender.com/health/ready). These links are endpoints, **not** a claim that the services are healthy at the moment you read this document. Render free instances may sleep.
 
-The bot currently runs long polling on Render. Its Render service includes a small HTTP health listener because Render Web Services expect an HTTP port. The bot logs confirm that it starts polling as `@shofly_bot` and can authenticate with the backend.
-
-## Architecture and request flow
+## Architecture
 
 ```text
-Telegram
-   │ TELEGRAM_BOT_TOKEN
-   ▼
-Telegram bot service
-   │ BOT_API_TOKEN
-   ▼
-FastAPI backend ───────► Neon PostgreSQL
-   ▲ WORKER_API_TOKEN
-   │
-Media worker
-
-Mini App ───────────────► FastAPI backend
-Admin Dashboard ────────► FastAPI backend
+Telegram users ──► @shofly_bot ──────┐
+       └────────► Telegram Mini App ─┤
+Admin ──────────► Admin Dashboard ───┤
+                                     ▼
+                               FastAPI Backend ◄────► Neon PostgreSQL
+                                     ▲
+                              WORKER_API_TOKEN
+                                     │
+                           Colab / local media worker
+                                     │
+                    HTTPS source ──► HTTPX downloader
+                                     │
+                          ffprobe / optional ffmpeg
+                                     │
+                        Telethon MTProto uploader
+                                     │
+                           Private Telegram channel
 ```
 
-The main content flow is:
+**Import flow:** Create title → register and approve rights → create import job with an authorized HTTPS source → approve import → worker claims job → download → probe/verify → upload to Telegram → verify and report → verify metadata → publish. Access/delivery is subject to rights, availability, and applicable entitlement checks.
 
-1. An admin creates a title and adds a rights record.
-2. An authorized import link is submitted and approved for the title.
-3. The media worker downloads, probes, and uploads the file to the private Telegram channel.
-4. The admin verifies metadata and publishes the title.
-5. Members browse the catalog through the Mini App or Telegram bot.
-6. Each delivery request re-checks rights, platform, territory, and entitlement.
-7. Takedown, rights revocation, or license expiry stops delivery on the next request.
+**Deletion flow:** Admin requests **Delete movie & Telegram files** → movie enters deletion state → worker deletes registered Telegram messages and reports confirmation → backend finalizes related movie records and import jobs. This is destructive and should be used only after backup and end-to-end validation. Lost or overwritten Telegram message references cannot be automatically discovered.
 
-## Services and environment variables
-
-### Backend: `shofly-backend`
-
-The backend is a Render Docker Web Service using the `backend/` Docker context. It runs database migrations before starting FastAPI.
-
-Important variables:
+## Repository layout
 
 ```text
+backend/                         FastAPI API, database models/migrations, tests
+apps/telegram-bot/               Telegram bot
+apps/mini-app/                   Member-facing Telegram Mini App
+apps/admin-dashboard/            Admin console
+workers/media-worker/            Downloader, probes, uploaders, cleanup, tests
+notebooks/media_worker.ipynb      Colab setup and execution
+services/stream-gateway/         Separate gateway component
+```
+
+## Backend configuration (Render)
+
+Deploy the `backend/` Docker context and configure required secrets in the Render service (do **not** commit them).
+
+```dotenv
 APP_ENV=production
 DATABASE_URL=postgresql+psycopg://...
-TELEGRAM_BOT_TOKEN=<token from @BotFather>
-JWT_SIGNING_KEY=<random signing secret>
-BOT_API_TOKEN=<internal bot-to-backend secret>
-WORKER_API_TOKEN=<internal worker-to-backend secret>
-ENCRYPTION_KEY=<valid Fernet key>
+TELEGRAM_BOT_TOKEN=<BotFather token>
+JWT_SIGNING_KEY=<random secret>
+BOT_API_TOKEN=<bot-to-backend token>
+WORKER_API_TOKEN=<worker-to-backend token>
+ENCRYPTION_KEY=<Fernet key>
 BOT_USERNAME=shofly_bot
 CORS_ORIGINS=https://shofly-mini.vercel.app,https://shofly-admin.vercel.app
-BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS=<your numeric Telegram id>   # first admin; no shell needed (see live test checklist)
-IMPORT_ALLOWED_HOSTS=<hostname(s) you are allowed to import from, e.g. shofly-mini.vercel.app>   # empty = every import is rejected
+BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS=<your numeric Telegram ID>
+IMPORT_ALLOWED_HOSTS=
 ```
 
-`DATABASE_URL` is stored only in Render. The database is Neon PostgreSQL. Neon connection strings may be copied in standard `postgresql://...` form; the application and Alembic migration setup normalize that form to the installed Psycopg 3 driver.
+`IMPORT_ALLOWED_HOSTS` is an **optional, comma-separated hostname allowlist**. Empty means no additional hostname restriction; it **does not disable** URL validation. Sources must be HTTPS, resolve to public IP addresses and use an accepted port. As of October 22, 2026, the code also permits HTTPS port `8443` for the **exact** hostname `d900.userdrive.org`; other custom ports remain blocked. The worker applies corresponding checks, including redirect validation. Do not treat URL validation as a guarantee against every DNS-rebinding or network-level attack.
 
-### Telegram bot: `shofly-telegram-bot`
+The backend and worker must use the **same** `WORKER_API_TOKEN`. Keep `BOT_API_TOKEN` separate from the Telegram BotFather token.
 
-The bot is deployed as a Render Web Service running:
+## Telegram bot (Render)
 
-```text
-cd apps/telegram-bot && python -m tgbot.main
-```
-
-It uses:
-
-```text
+```dotenv
 API_BASE_URL=https://shofly-backend.onrender.com
-TELEGRAM_BOT_TOKEN=<same token issued by @BotFather>
-BOT_API_TOKEN=<same value configured on the backend>
+TELEGRAM_BOT_TOKEN=<BotFather token>
+BOT_API_TOKEN=<matching backend token>
 PUBLIC_APP_URL=https://shofly-mini.vercel.app
-PORT=<set automatically by Render; when present the bot also opens a tiny health listener>
 ```
 
-The bot token and the internal API token must not be confused:
+Bot command: `cd apps/telegram-bot && python -m tgbot.main`. The current bot uses long polling; the Render web-service process exposes a lightweight HTTP health listener when `PORT` is supplied. Do not run two polling instances of the same bot simultaneously.
 
-- `TELEGRAM_BOT_TOKEN` authenticates the bot with Telegram and is issued by `@BotFather`.
-- `BOT_API_TOKEN` authenticates the bot when it calls the Shofly backend and is generated by the project owner.
-- `WORKER_API_TOKEN` authenticates the media worker when it calls the Shofly backend.
+## Frontends (Vercel)
 
-### Frontends
+Set `VITE_API_BASE_URL=https://shofly-backend.onrender.com` in both Vercel projects. Their respective root directories are `apps/mini-app` and `apps/admin-dashboard`; build with `npm run build`, output `dist`. Open admin authentication through its intended Telegram entry point.
 
-Both Vercel frontends use:
+## Colab worker — recommended media workflow
 
-```text
-VITE_API_BASE_URL=https://shofly-backend.onrender.com
+Use [`notebooks/media_worker.ipynb`](notebooks/media_worker.ipynb). Keep tokens in Colab Secrets, never in notebook source or GitHub. The notebook reads:
+
+- `SHOFLY_API_URL`, `WORKER_API_TOKEN`
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_STORAGE_CHANNEL_ID`
+- `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`
+
+The bot must have appropriate access to the private storage channel. The notebook sets up the Python worker, ffmpeg tools, API connectivity and Telethon storage provider.
+
+**After a GitHub worker update:** rerun the notebook's repository update/install cell (**cell 3** in the current workflow), configuration (**cell 5**), initialization/provider (**cell 7**) and processing (**cell 11**). If modules were already imported in the runtime, **restart the Colab runtime and rerun the setup** to ensure new Python code is loaded. Notebook cell positions can change; follow cell content if numbering differs.
+
+### Parallel HTTPX downloads
+
+The default downloader is `httpx`, not aria2c. It now supports **concurrent HTTP byte-range requests**. The current Colab notebook configures:
+
+```python
+USE_ARIA2 = False
+os.environ["DOWNLOADER"] = "httpx"
+os.environ["HTTPX_PARALLEL_CONNECTIONS"] = "8"
+os.environ["HTTPX_CHUNK_SIZE_MB"] = "8"
 ```
 
-Vercel project root directories:
+**Behavior:**
 
-```text
-apps/mini-app
-apps/admin-dashboard
+1. Probe the source using a one-byte `Range` request, validating redirects.
+2. If the source returns a valid `206 Partial Content` with a known total size, divide it into bounded chunks.
+3. Download up to eight chunks concurrently, validate each `Content-Range`, and write each chunk at its correct offset.
+4. Verify completed file size and compute SHA-256 before proceeding.
+5. If byte ranges are unsupported at the initial probe, fall back to the existing single-stream HTTPX downloader.
+
+Settings: `HTTPX_PARALLEL_CONNECTIONS` (1–32, default 8) and `HTTPX_CHUNK_SIZE_MB` (default 8; at least 1). Parallelism can improve throughput **only when the source supports ranges and has available bandwidth**. Test 1, 4, 8 and 16 connections against the same authorized source; more connections are not necessarily faster. The new parallel implementation has automated tests but **has not yet been verified with a real UserDrive download in Colab**.
+
+The alternate `aria2c` downloader remains in the repository. It is opt-in and requires a source hostname allowlist; the default Colab path does **not** require enabling it or adding `TRUSTED_SOURCE_HOSTS`.
+
+### Parallel Telegram MTProto uploads
+
+The Colab notebook currently sets:
+
+```python
+os.environ["MTPROTO_CONNECTIONS"] = "4"
+os.environ["MTPROTO_PARALLEL_WORKERS"] = "16"
 ```
 
-Build command:
+The worker uses Telethon MTProto to send 512 KiB file parts with up to **four independent MTProto clients and sixteen concurrent upload tasks**. It verifies the uploaded Telegram asset before reporting successful completion. Configurable defaults are in `workers/media-worker/shofly_worker/config.py`. These settings are distinct from the **50 MB hosted Bot API** upload limit; Telegram's own applicable MTProto limits still apply. Large files may be split into playable segments according to worker settings.
 
-```text
-npm run build
-```
+Inspect `upload_parallel_summary`, `segment_verified`, `job_completed` and the final processed outcomes. An earlier **four-worker, single-connection** experiment transferred approximately 1,202 MiB in 385 seconds (~3.12 MiB/s). This is historical baseline data, **not** a benchmark of the newer four-connection/sixteen-worker configuration.
 
-Output directory:
+### Other worker settings
 
-```text
-dist
-```
-
-### Media worker
-
-The media worker is not deployed yet. Run it from your own computer or Colab for now (a Render Background Worker is a separate service type; check Render's current pricing before relying on it). It needs:
-
-```text
+```dotenv
 API_BASE_URL=https://shofly-backend.onrender.com
-WORKER_API_TOKEN=<same value configured on the backend>
+WORKER_API_TOKEN=<matching backend secret>
+DOWNLOADER=httpx
+HTTPX_PARALLEL_CONNECTIONS=8
+HTTPX_CHUNK_SIZE_MB=8
+DOWNLOAD_MAX_BYTES=8589934592
+DOWNLOAD_TIMEOUT=1800
+MTPROTO_CONNECTIONS=4
+MTPROTO_PARALLEL_WORKERS=16
+SPLIT_LARGE_MEDIA=true
+SEGMENT_MAX_BYTES=1992294400
+FFMPEG_VERIFY=true
+FFMPEG_VERIFY_TIMEOUT=600
 ```
 
-Start it with `cd workers/media-worker && pip install -r requirements.txt && python -m shofly_worker`. It checks the queue, processes every claimable job, sleeps `POLL_SECONDS` (default 30) and repeats; Ctrl+C is safe (unfinished jobs are re-queued when their lease expires). Extra variables: `PROVIDER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (private storage channel id, starts with `-100`). `ffprobe` (part of ffmpeg) must be installed.
+These are representative settings; notebook configuration takes precedence when it sets the environment. Worker `ALLOWED_HOSTS` is an optional additional hostname restriction. Downloaded media uses temporary local storage unless an optional persistent-download configuration is enabled for aria2c.
 
-The Colab worker can still be used for development; see `workers/media-worker/README.md` and `notebooks/media_worker.ipynb`.
-
-## Live test checklist (your deployment, in order)
-
-Free Render services sleep when idle: the first request can take about a minute. Open `/health/ready` on the backend first and wait for `{"status":"ready"}`.
-
-1. **Make yourself admin.** Message `@userinfobot` to get your numeric Telegram id. On the Render backend service add `BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS=<id>` and `IMPORT_ALLOWED_HOSTS=shofly-mini.vercel.app`, save, and let it redeploy. The log shows `bootstrapped super_admin for 1 telegram id(s)`.
-2. **Bot basics.** Send `/start` to `@shofly_bot`: welcome message in your language, then `/language` and switch; reopen the bot and confirm it stayed. Browse is empty ("Nothing here yet") because production has no seed data.
-3. **Mini App buttons.** In `@BotFather`: `/mybots` → shofly_bot → Bot Settings → Menu Button → URL `https://shofly-mini.vercel.app`. For the admin app run `/newapp` with `https://shofly-admin.vercel.app` and open the link it gives you (the admin app only signs in from inside Telegram; non-admins see "Access denied").
-4. **Storage channel.** Create a private channel, add `@shofly_bot` as administrator, and get the channel id (`-100…`) by forwarding a channel post to a "JSON dump" style bot such as `@JsonDumpBot` (third-party: use it only on this test channel).
-5. **Test video.** Use a short video you own (max 50 MB). Put it in `apps/mini-app/public/test.mp4`, push (Vercel redeploys), and check `https://shofly-mini.vercel.app/test.mp4` downloads. Delete it afterwards.
-6. **Admin app.** Titles → create a movie → copy its ID. Rights → New rights record (movie, that ID, license "owned", evidence "test", Telegram ticked, territory ALL, dates covering today) → **Approve**. Imports → paste the test.mp4 URL → **Create** → enter movie + ID → **Approve** (status becomes READY).
-7. **Run the worker** (your computer, see Media worker). Expected log: `cycle 1: ['COMPLETED']`. Admin → the title now lists one media file.
-8. **Publish.** Title page → **Mark metadata verified** → **Publish**.
-9. **Receive it.** In the bot search the title → **Send me the file** (or Mini App → title → **Send via Telegram**). The video arrives in your chat.
-10. **Takedown.** Admin → **Unpublish** → tap the old button again: "isn't available".
-
-| Symptom | Likely cause |
-|---|---|
-| Bot silent | service asleep/crashed: check Render bot logs for "start polling"; `TELEGRAM_BOT_TOKEN` wrong; two bot instances polling at once (local + Render) |
-| Bot says "Something went wrong" | backend asleep, or `BOT_API_TOKEN` differs between bot and backend |
-| Mini App/Admin shows network errors | `CORS_ORIGINS` missing the Vercel domain, or `VITE_API_BASE_URL` wrong |
-| Admin "Open from Telegram" | opened in a normal browser; use the Telegram link |
-| Admin "Access denied" | your id is not in `BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS`, or the backend has not redeployed |
-| Import "Source rejected" | host not in `IMPORT_ALLOWED_HOSTS`, not https, or resolves to a private address |
-| Job stuck READY | worker not running / wrong `WORKER_API_TOKEN` ("backend rejected the worker token") |
-| Job RETRY_WAIT with `PROBE_UNAVAILABLE` | ffmpeg/ffprobe not installed on the worker machine |
-| `FILE_TOO_LARGE` | over 50 MB (Telegram Bot API upload cap) |
-| Job BLOCKED_RIGHTS | rights not approved/in date/Telegram not ticked; fix, then Retry |
-| Publish "Cannot publish yet" | the list shows which of metadata / file / rights is missing |
-
-## Local development
-
-### Backend
+Run locally:
 
 ```bash
+cd workers/media-worker
+pip install -r requirements.txt
+python -m shofly_worker
+```
+
+Install `ffmpeg`/`ffprobe` on the host. The CLI polls for jobs; a notebook can instead call `run_until_empty` to process queued work and pending cleanup.
+
+## Admin operations
+
+1. **Titles:** create a movie or series and enter metadata.
+2. **Rights:** create the appropriate rights record with valid dates, territories and Telegram permission; have it approved by an authorized role.
+3. **Imports:** submit a direct HTTPS source and associate it with the correct target title; approve the import.
+4. **Worker:** run Colab to process the job; confirm download, media probing, upload and verification.
+5. **Publishing:** verify metadata and publish only after prerequisites are satisfied.
+6. **Cleanup:** use the explicit delete action to queue registered Telegram assets for deletion; run the worker again to finish cleanup.
+
+Only use media you own or are licensed to distribute. A reachable source URL does not itself grant redistribution rights.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Render backend takes time to respond | Free instance may be asleep; check `/health/live` and `/health/ready` |
+| Bot is silent | Render logs, polling process, token, duplicate polling instances |
+| Admin says “Open from Telegram” | Open via Telegram's intended authentication flow |
+| Admin access denied | Bootstrap admin ID, assigned role and deployment |
+| Frontend network/CORS error | `VITE_API_BASE_URL`, `CORS_ORIGINS`, backend availability |
+| “Source rejected: host not allowed or address unsafe” | HTTPS, hostname allowlist, public DNS/IP, accepted port, backend deployment |
+| UserDrive `:8443` rejected | Exact `d900.userdrive.org` hostname, updated Render backend, correct URL |
+| Job remains READY | Colab worker not running, wrong `WORKER_API_TOKEN`, unapproved import/rights |
+| `UNSAFE_SOURCE` | Worker URL or redirect failed validation; inspect hostname/port/redirects |
+| `INVALID_RANGE` | Source ignored or returned inconsistent byte-range data; retry with one HTTPX connection |
+| `DOWNLOAD_NETWORK_ERROR` / `DOWNLOAD_HTTP_ERROR` | Source connectivity, HTTP response, expiration, rate limits |
+| `PROBE_FAILED` / `PROBE_UNAVAILABLE` | Source is not a usable media file, or ffprobe missing |
+| `ARIA2_DOWNLOAD_FAILED` | Applies only when aria2c mode is enabled; HTTPX mode does not invoke aria2c |
+| `FILE_TOO_LARGE` | Check source download ceiling, MTProto file limit and segment settings |
+| `BLOCKED_RIGHTS` | Rights approval, dates, territories and Telegram permission |
+| Upload is slow | Compare `upload_parallel_summary` and network throughput; 16 workers is not a speed guarantee |
+| Delete action remains pending | Run Colab cleanup worker; inspect registered Telegram references and cleanup logs |
+
+## Local development and tests
+
+```bash
+# Backend
 cd backend
 cp .env.example .env
-# Fill the required secrets in .env
-python -m venv .venv
-. .venv/bin/activate
 pip install -r requirements.txt
 alembic upgrade head
-python -m scripts.seed       # development fixtures only
 uvicorn app.main:app --reload
-```
 
-The default local database is SQLite. PostgreSQL is recommended for deployed environments.
-
-### Telegram bot
-
-```bash
-cd apps/telegram-bot
+# Telegram bot
+cd ../apps/telegram-bot
 pip install -r requirements.txt
-cp .env.example .env
 python -m tgbot.main
-```
 
-The local bot requires `TELEGRAM_BOT_TOKEN`, `BOT_API_TOKEN`, and `API_BASE_URL`.
-
-### Frontends
-
-```bash
-cd apps/mini-app
-npm install
-npm run dev
-
-cd ../admin-dashboard
+# Frontends (each app directory)
 npm install
 npm run dev
 ```
 
-### Tests
+Test suites:
 
 ```bash
 cd backend && python -m pytest -q
-cd apps/telegram-bot && python -m pytest -q
-cd workers/media-worker && python -m pytest -q
-cd apps/mini-app && npm test
-cd apps/admin-dashboard && npm test
+cd ../apps/telegram-bot && python -m pytest -q
+cd ../../workers/media-worker && python -m pytest -q
+cd ../../apps/mini-app && npm test
+cd ../admin-dashboard && npm test
 ```
 
-## Secret generation
+CI also validates relevant builds and migration/API contracts. A committed test is not evidence that the latest CI run has passed; check [GitHub Actions](https://github.com/MohammedTeir/shofly-project/actions) for current results.
 
-Generate an internal API token with Python:
+## Security, secrets and operational limitations
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+- Never commit Telegram tokens, API tokens, database URLs, Telethon sessions or Colab secrets.
+- Generate separate high-entropy secrets for bot-to-backend and worker-to-backend authentication.
+- Back up Neon data and validate recovery before destructive movie cleanup.
+- Keep source checks and rights enforcement enabled. SSRF validation has known DNS-rebinding limitations and is not a replacement for network egress controls.
+- Render free services may sleep; the polling bot may require an always-on service or a future webhook implementation.
+- Google Colab is **not** an always-on production worker; runtime lifetime and resource limits apply.
+- Parallel HTTPX downloads and the newest MTProto multi-connection uploads require real-world end-to-end validation.
+- Telegram storage cleanup covers registered references, not orphaned historical messages.
+- A private Telegram channel is not a substitute for rights clearance or durable independent backups.
 
-Generate a JWT signing key:
+## Planned / not guaranteed
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(64))"
-```
+Subscription billing, Telegram Stars, automated metadata matching, recommendation AI, production monitoring, notifications, webhook bot operation, resumable HTTPX downloads, and browser streaming should be treated as separate features or future work unless verified in their respective code paths.
 
-Generate a valid Fernet encryption key:
+## Documentation
 
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
+- [Backend](backend/README.md)
+- [Telegram bot](apps/telegram-bot/README.md)
+- [Mini App](apps/mini-app/README.md)
+- [Admin Dashboard](apps/admin-dashboard/README.md)
+- [Media worker](workers/media-worker/README.md)
+- [Colab notebook](notebooks/media_worker.ipynb)
 
-Never commit secret values to GitHub or put them in the README. When rotating `BOT_API_TOKEN`, update both the backend and bot service. When rotating `WORKER_API_TOKEN`, update both the backend and worker service. Do not casually rotate `JWT_SIGNING_KEY` or `ENCRYPTION_KEY` in production because existing sessions or encrypted data may become unusable.
+---
 
-## Deployment and debugging history
-
-The repository was published as a private GitHub repository at `MohammedTeir/shofly-project`, with `main` as the deployment branch.
-
-The initial Render backend deployment failed because Alembic could not import the `app` package from the container. The Dockerfile was fixed by setting `PYTHONPATH=/srv`.
-
-The first Render database reference was not expanded correctly and appeared at runtime as `${{shofly-db.DATABASE_URL}}`. For development testing, the service was temporarily configured with SQLite. It was later switched to Neon PostgreSQL through the Render `DATABASE_URL` environment variable.
-
-The Neon URL initially caused SQLAlchemy to select `psycopg2`, which was not installed. The backend database setup and Alembic migration setup were updated to normalize `postgresql://` and `postgres://` URLs to `postgresql+psycopg://`. This fixed both application startup and migrations.
-
-GitHub Actions initially failed in the migration job for the same Python import-path reason. The CI workflow was updated with `PYTHONPATH=${{ github.workspace }}/backend`. The frontend builds, frontend tests, backend tests, secret scan, and the corrected migration job now pass.
-
-The Telegram bot was first validated with Telegram's `getMe` endpoint. An earlier token returned `401 Unauthorized` and was not used. A replacement token was accepted by Telegram and configured in Render. The bot service now starts polling as `@shofly_bot` and successfully authenticates with the backend.
-
-CORS was configured for both Vercel domains. The bot service received a small HTTP health listener so it could run on Render's Web Service runtime while continuing to use Telegram long polling.
-
-Later fixes: the bot health listener now sends a computed `Content-Length`, and only opens a port when `PORT` is set (Render sets it, local runs do not); the backend image listens on `$PORT` (default 8000); `BOOTSTRAP_SUPER_ADMIN_TELEGRAM_IDS` lets you create the first admin without a shell; the worker gained `python -m shofly_worker`.
-
-## Remaining work
-
-- Run the media worker (your computer/Colab now; a persistent host later).
-- Test the complete flow in Telegram: `/start`, browsing, search, favorites, Mini App opening, and backend authorization.
-- Configure Neon backups, branches, and production connection settings as needed.
-- Free Render services spin down after inactivity, and a polling bot cannot wake itself. Either upgrade the bot service, or switch the bot to Telegram webhook mode (a request then wakes it; not built yet, recommended next).
-- Implement remaining specification items: Gemini/TMDB matching, content requests, subscriptions/Stars, web playback or object storage, watch progress, webhook mode, deep links, notifications, and production monitoring.
-
-## Security reminders
-
-- Never commit `.env` files, database URLs, Telegram tokens, or internal API tokens.
-- Revoke temporary Telegram tokens through `@BotFather` after testing.
-- Keep `TELEGRAM_BOT_TOKEN`, `BOT_API_TOKEN`, and `WORKER_API_TOKEN` as separate secrets.
-- Use Neon PostgreSQL rather than local SQLite for deployed data because Render service files are ephemeral.
-
-## October 2026 operational changes (MTProto, cleanup and deployment)
-
-- Large media imports use the Colab media worker with Telethon MTProto, not the hosted Bot API's 50 MB upload path. The worker downloads and probes media, uploads it to the private Telegram storage channel, verifies the uploaded message and reports completion. `notebooks/media_worker.ipynb` configures `MTPROTO_PARALLEL_WORKERS=4`.
-- Parallel upload diagnostics include `upload_parallel_metrics` roughly every 30 seconds (`window_mb_s`, `active`, `peak_active`, `requests`, `retries`, `avg_request_ms`) and `upload_parallel_summary` on completion. In one 1,202.1 MiB Colab run, four workers uploaded in 385 seconds at 3.12 MiB/s with zero retries; this is an observation, not a performance guarantee.
-- The admin movie detail page now includes **Delete movie & Telegram files**. It stages the movie as `deleting` and queues its registered Telegram assets for cleanup. Run the MTProto worker to remove and confirm the storage messages. The backend then removes movie metadata, associated rights, favorites, collection membership, media records and related import jobs after all registered assets report `deleted`. Active imports block deletion. This destructive path has **not yet passed end-to-end production testing**: do not use it on irreplaceable content without backups and validation. The workflow cannot discover Telegram messages whose references were previously overwritten or lost (for example an older .bin message).
-- The backend's OpenAPI snapshot must be updated whenever API endpoints change; CI checks it. A Vercel Hobby/free project may hit a daily deployment quota; code commits can continue while new frontend deployments are blocked.
-- Earlier sections describe the initial Bot API worker and deployment checklist and may be superseded by the MTProto-specific instructions above.
+**Last major documentation refresh:** October 22, 2026. The GitHub repository and code are the source of truth for configuration defaults; deployment state may differ until Render/Vercel redeploy and Colab reload.
