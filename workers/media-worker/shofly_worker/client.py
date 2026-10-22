@@ -44,3 +44,11 @@ class BackendClient:
     def fail(self, jid: str, code: str, message: str, retryable: bool):
         return self._post(f"/jobs/{jid}/fail", {"lease_owner": self.worker_id, "error_code": code,
                                                  "error_message_safe": message[:300], "retryable": retryable})
+
+
+    def claim_cleanup(self):
+        return self._post("/cleanup/claim", {})["asset"]
+
+    def finish_cleanup(self, asset_id: str, success: bool, error_code: str | None = None):
+        return self._post(f"/cleanup/{asset_id}/finish",
+                          {"success": success, "error_code": error_code})
