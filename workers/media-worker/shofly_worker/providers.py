@@ -211,3 +211,24 @@ class MTProtoTelegramProvider:
             self._run(remove)
         except Exception:
             pass
+
+
+    def delete_confirmed(self, ref: str) -> bool:
+        """Delete an MTProto channel message and verify it no longer exists.
+
+        Raises on API failures; unlike legacy delete(), errors are never swallowed.
+        """
+        chat, message_id, _ = ref.split(":", 2)
+        if int(chat) != self.chat_id:
+            raise ValueError("Cleanup reference belongs to another storage channel")
+        mid = int(message_id)
+
+        async def remove(client):
+            before = await client.get_messages(self.chat_id, ids=mid)
+            if not before:
+                return True  # Already absent; idempotent cleanup.
+            await client.delete_messages(self.chat_id, [mid])
+            after = await client.get_messages(self.chat_id, ids=mid)
+            return not bool(after)
+
+        return bool(self._run(remove))
