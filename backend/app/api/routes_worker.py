@@ -99,8 +99,29 @@ def complete(jid: uuid.UUID, body: CompleteIn, db: Session = Depends(get_db)):
     if body.segment_refs and body.segment_refs[0] != body.provider_ref:
         raise AppError(400, "INVALID_SEGMENTS", "First segment must match primary reference.")
     col = MediaAsset.movie_id if job.candidate_kind == "movie" else MediaAsset.episode_id
-    dup = db.scalar(select(MediaAsset).where(col == job.target_id, MediaAsset.checksum_sha256 == body.checksum_sha256))
-    if dup:  # same bytes already attached to this target: never create a second asset
+    dup = db.scalar(select(MediaAsset).where(col == job.target_id,
+                      MediaAsset.checksum_sha256 == body.checksum_sha256).with_for_update())
+    if dup and dup.upload_status in ("inactive", "cleanup_pending", "cleanup_failed"):
+        # Same bytes but a fresh Telegram upload: replace the stale storage reference
+        # atomically, preserving the unique checksum constraint and the asset ID.
+        # Reject a replacement while another worker is actively deleting the old message.
+        old_ref = dup.provider_ref_encrypted
+        old_segments = dup.segment_refs_encrypted
+        dup.provider = body.provider
+        dup.provider_ref_encrypted = encrypt(body.provider_ref)
+        dup.segment_refs_encrypted = [encrypt(ref) for ref in body.segment_refs] if body.segment_refs else None
+        dup.import_job_id = job.id
+        dup.size_bytes = body.size_bytes
+        dup.duration_sec = body.duration_sec
+        dup.quality = body.quality
+        dup.codec = body.codec
+        dup.audio_language = body.audio_language
+        dup.edition = body.edition
+        dup.upload_status = "verified"
+        asset, duplicate = dup, False
+        audit(db, None, "media.reupload_replaced", "media_asset", dup.id,
+              {"previous_status": "inactive_or_pending", "old_storage_cleanup": "not_performed"})
+    elif dup:
         asset, duplicate = dup, True
     else:
         asset = MediaAsset(id=uuid.uuid4(), import_job_id=job.id, provider=body.provider,
