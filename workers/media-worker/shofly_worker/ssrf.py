@@ -20,13 +20,15 @@ def check_url(url: str, allowed_hosts: set[str] | None = None, resolver=socket.g
         port = u.port
     except ValueError:
         raise UnsafeURL("port")
-    if u.scheme != "https" or not u.hostname or u.username or u.password or port not in (None, 443):
+    if u.scheme != "https" or not u.hostname or u.username or u.password:
         raise UnsafeURL("url")
     host = u.hostname.lower().rstrip(".")
+    if port not in (None, 443) and not (port == 8443 and host == "d900.userdrive.org"):
+        raise UnsafeURL("port")
     if allowed_hosts and host not in allowed_hosts:
         raise UnsafeURL("host")
     try:
-        ips = {i[4][0] for i in resolver(host, 443, type=socket.SOCK_STREAM)}
+        ips = {i[4][0] for i in resolver(host, port or 443, type=socket.SOCK_STREAM)}
     except OSError:
         raise UnsafeURL("unresolvable")
     if not ips or any(_bad(i) for i in ips):
