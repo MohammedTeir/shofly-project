@@ -44,3 +44,10 @@ API change? CI fails until `python -m scripts.export_openapi` is re-run and the 
 Telegram webhook mode (bot uses long polling, one instance only), DNS-rebinding hardening of imports, distributed rate limiting
 (in-process, per instance), automated backups, alerting, load testing, Gemini/TMDB matching, requests, subscriptions, privacy
 notice and data-deletion workflow (spec 13.3), legal review of your content rights.
+
+
+## Current Colab deployment notes (October 2026)
+
+The earlier first-content instructions about the hosted Bot API 50 MB limit are outdated for the current large-file worker. Open `https://colab.research.google.com/github/MohammedTeir/shofly-project/blob/main/notebooks/media_worker.ipynb`, use Python 3 / CPU, and run all cells. Telethon MTProto uploads large files to the private Telegram channel; the notebook sets four parallel upload workers. Ensure the bot/session has permission to post and delete messages in that channel. Review the worker README for diagnostics and cleanup limitations.
+
+GitHub commits do not guarantee Vercel deployment. When Vercel reports `api-deployments-free-per-day`, wait for its quota to reset and avoid repeated redeploy attempts. Verify that the admin dashboard and backend have deployed the same compatible version before using new API actions. Do not use movie-level permanent deletion in production until its end-to-end flow has been validated.
