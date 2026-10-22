@@ -83,7 +83,7 @@ function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: 
         {((data as Json)?.items ?? []).length === 0 ? <Msg text={t("empty")} /> :
           ((data as Json).items as Json[]).map((asset) => <Row key={asset.id}>
             <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2">
-              <Badge text={asset.upload_status} tone={asset.upload_status === "verified" ? "ok" : "warn"} />
+              <Badge text={asset.upload_status} tone={asset.upload_status === "verified" ? "ok" : asset.upload_status === "cleanup_failed" ? "bad" : "warn"} />
               <span className="text-sm">{asset.quality || "Video"}{asset.edition ? ` · ${asset.edition}` : ""}</span>
               <span className="text-xs text-muted">{(asset.size_bytes / 1048576).toFixed(1)} MB</span>
             </div><Mono>{asset.id}</Mono></div>
@@ -108,7 +108,7 @@ function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: 
             </Btn>}
           </Row>)}
       </LoadBox>}
-    <p className="mt-2 text-xs text-muted">{t("media_retained_notice", { defaultValue: "Disabling a video blocks delivery but does not delete its Telegram storage message." })}</p>
+    <p className="mt-2 text-xs text-muted">{t("media_retained_notice", { defaultValue: "Disabling a video blocks delivery. Cleanup requires the MTProto worker to run; deleted means Telegram confirmed removal." })}</p>
     <ErrorNote error={actionError} />
   </Section>;
 }
