@@ -264,3 +264,19 @@ Subscription billing, Telegram Stars, automated metadata matching, recommendatio
 ---
 
 **Last major documentation refresh:** October 22, 2026. The GitHub repository and code are the source of truth for configuration defaults; deployment state may differ until Render/Vercel redeploy and Colab reload.
+
+
+## Multi-quality Telegram delivery (October 22, 2026)
+
+**Implemented in code; end-to-end Colab/Telegram validation is still pending.** New imports can generate lower-resolution MP4 versions with FFmpeg and store each version as its own verified Telegram media asset. The Colab notebook sets `GENERATE_QUALITIES=true` and `TRANSCODE_TIMEOUT=7200` seconds; the worker configuration defaults to `GENERATE_QUALITIES=false` outside that notebook to avoid unexpected CPU/storage costs.
+
+- The uploaded original is preserved, including its true probed height (for example `800p`); no upscaling is performed.
+- FFmpeg generates eligible lower rungs from `1080p`, `720p`, `480p`, `360p`. For a 1080p original, the generated variants are 720p/480p/360p, while 1080p remains the original. For an 800p original, only 720p/480p/360p are generated.
+- Each generated version is uploaded and verified independently, registered under the same movie/episode, and displays its **actual size** in the Telegram quality picker.
+- The bot shows a tidy quality-selection screen for movies and episodes. Selecting a quality copies only that version from the private Telegram channel into the user's chat; delivery authorization is rechecked on every request.
+- Existing movie deletion queues **all registered quality assets** for Telegram cleanup before finalizing movie removal. This does not recover orphaned messages with missing references.
+- Transcoding happens **after the original import is committed**. If generation/upload fails, the original remains available; logs include `quality_generation_incomplete`. Successful versions log `quality_ready`. A newly uploaded but unregistered variant is best-effort cleaned up.
+- **Existing movies are not automatically backfilled**. The feature applies to new imports with quality generation enabled; previously uploaded titles need a separate controlled backfill workflow.
+- FFmpeg re-encoding is CPU-intensive and can take significant time and disk space on Colab. Quality ladder bitrates are targets, not promises of exact output sizes or perceptual quality. Upload and storage usage multiply with each version.
+
+Check [GitHub Actions](https://github.com/MohammedTeir/shofly-project/actions) and perform a small, licensed test upload before enabling this workflow for valuable media.
