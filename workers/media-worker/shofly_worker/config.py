@@ -27,7 +27,8 @@ class WorkerSettings(BaseSettings):
     telegram_api_hash: str | None = None
     telegram_session: str = "/content/drive/MyDrive/Shofly/telegram_bot"
     mtproto_max_bytes: int = 2 * 1024 * 1024 * 1024
-    mtproto_parallel_workers: int = 4  # 1 selects sequential Telethon upload
+    mtproto_parallel_workers: int = 16  # total upload tasks: 4 per connection
+    mtproto_connections: int = 4  # independent MTProto clients
     split_large_media: bool = False
     segment_max_bytes: int = 0  # 0 means provider's own max size
     persistent_download_dir: str = ""  # optional mounted storage for partial transfers
