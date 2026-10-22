@@ -49,6 +49,9 @@ class BotApi:
     async def season(self, token: str, series_id: str, number: int) -> dict:
         return await self._req("GET", f"/catalog/series/{series_id}/seasons/{number}", token)
 
+    async def episode_qualities(self, token: str, episode_id: str) -> dict:
+        return await self._req("GET", f"/catalog/episodes/{episode_id}/qualities", token)
+
     async def favorites(self, token: str, offset: int, limit: int) -> dict:
         return await self._req("GET", "/me/favorites", token, params={"cursor": offset, "limit": limit})
 
