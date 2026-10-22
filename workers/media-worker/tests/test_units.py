@@ -189,3 +189,23 @@ def test_transcode_failure_removes_partial_output(tmp_path, monkeypatch):
         list(transcode.generate_variants(tmp_path / "source.mp4", tmp_path / "out", 720))
     assert exc.value.code == "TRANSCODE_FAILED"
     assert not (tmp_path / "out" / "480p.mp4").exists()
+
+
+def test_transcode_continues_after_one_failed_quality(tmp_path, monkeypatch):
+    from shofly_worker import transcode
+    errors = []
+    def mixed_run(cmd, **kwargs):
+        output = Path(cmd[-1])
+        if output.name == "720p.mp4":
+            output.write_bytes(b"partial")
+            return subprocess.CompletedProcess(cmd, 1, b"", b"bad")
+        output.write_bytes(b"valid")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+    monkeypatch.setattr(transcode.subprocess, "run", mixed_run)
+    src = tmp_path / "source.mp4"
+    src.write_bytes(b"original")
+    qualities = [q for q, _ in transcode.generate_variants(
+        src, tmp_path / "qualities", 1080, on_error=lambda q, code: errors.append((q, code)))]
+    assert qualities == ["480p", "360p"]
+    assert errors == [("720p", "TRANSCODE_FAILED")]
+    assert not (tmp_path / "qualities" / "720p.mp4").exists()
