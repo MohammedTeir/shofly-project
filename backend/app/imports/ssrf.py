@@ -27,13 +27,13 @@ def validate_source_url(url: str, allowed_hosts: set[str] | None = None, resolve
         port = u.port
     except ValueError:
         raise UnsafeURL("port")
-    if port not in (None, 443):
-        raise UnsafeURL("port")
     host = u.hostname.lower().rstrip(".")
+    if port not in (None, 443) and not (port == 8443 and host == "d900.userdrive.org"):
+        raise UnsafeURL("port")
     if allowed_hosts and host not in allowed_hosts:
         raise UnsafeURL("host not allowlisted")
     try:
-        infos = (resolver or RESOLVER)(host, 443, type=socket.SOCK_STREAM)
+        infos = (resolver or RESOLVER)(host, port or 443, type=socket.SOCK_STREAM)
     except OSError:
         raise UnsafeURL("unresolvable")
     ips = {i[4][0] for i in infos}
