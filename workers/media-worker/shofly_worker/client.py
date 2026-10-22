@@ -41,6 +41,9 @@ class BackendClient:
 
     def complete(self, jid: str, **fields): return self._post(f"/jobs/{jid}/complete", {"lease_owner": self.worker_id, **fields})
 
+    def register_variant(self, source_asset_id: str, **fields):
+        return self._post(f"/assets/{source_asset_id}/variants", fields)
+
     def fail(self, jid: str, code: str, message: str, retryable: bool):
         return self._post(f"/jobs/{jid}/fail", {"lease_owner": self.worker_id, "error_code": code,
                                                  "error_message_safe": message[:300], "retryable": retryable})
