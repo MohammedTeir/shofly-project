@@ -140,6 +140,17 @@ def claim_cleanup(db: Session = Depends(get_db)):
                  .with_for_update(skip_locked=True).limit(1))
     if asset is None:
         return {"asset": None}
+    # Never delete the last playable copy of a movie/episode.
+    col = MediaAsset.movie_id if asset.movie_id else MediaAsset.episode_id
+    target = asset.movie_id or asset.episode_id
+    replacement = db.scalar(select(MediaAsset.id).where(
+        col == target, MediaAsset.id != asset.id,
+        MediaAsset.upload_status == "verified").limit(1))
+    if replacement is None:
+        asset.upload_status = "inactive"
+        audit(db, None, "media.cleanup_blocked_last_copy", "media_asset", asset.id)
+        db.commit()
+        return {"asset": None, "blocked": True, "reason": "LAST_COPY"}
     refs = [decrypt(asset.provider_ref_encrypted)]
     refs += [decrypt(ref) for ref in (asset.segment_refs_encrypted or [])]
     # Refuse to delete any message referenced by a different asset.
