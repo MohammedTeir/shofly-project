@@ -193,6 +193,8 @@ def restore_media_asset(asset_id: uuid.UUID, admin: User = Depends(staff), db: S
     a = db.scalar(select(MediaAsset).where(MediaAsset.id == asset_id).with_for_update())
     if a is None:
         raise AppError(404, "NOT_FOUND", "Asset does not exist.")
+    if a.upload_status == "cleanup_pending":
+        raise AppError(409, "CLEANUP_PENDING", "Cleanup must be cancelled before restoring this asset.")
     if a.upload_status != "verified":
         a.upload_status = "verified"
         audit(db, admin.id, "media.restore", "media_asset", a.id)
@@ -266,3 +268,16 @@ def request_media_cleanup(asset_id: uuid.UUID, admin: User = Depends(staff), db:
           {"telegram_deleted": False})
     db.commit()
     return {"id": asset.id, "status": "cleanup_pending", "telegram_deleted": False}
+
+
+@router.post("/assets/{asset_id}/cancel-cleanup")
+def cancel_media_cleanup(asset_id: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(get_db)):
+    asset = db.scalar(select(MediaAsset).where(MediaAsset.id == asset_id).with_for_update())
+    if asset is None:
+        raise AppError(404, "NOT_FOUND", "Asset does not exist.")
+    if asset.upload_status != "cleanup_pending":
+        raise AppError(409, "INVALID_TRANSITION", "Asset is not awaiting cleanup.")
+    asset.upload_status = "inactive"
+    audit(db, admin.id, "media.cleanup_cancelled", "media_asset", asset.id)
+    db.commit()
+    return {"id": asset.id, "status": "inactive", "telegram_deleted": False}
