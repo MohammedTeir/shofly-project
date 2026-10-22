@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 import httpx
 from shofly_worker.client import ApiError, BackendClient
-from shofly_worker.downloader import download
+from shofly_worker.downloader import download, download_parallel
 from shofly_worker.aria2_downloader import download_aria2
 from shofly_worker.errors import LeaseLost, SourceExpired, WorkerError
 from shofly_worker.probe import probe, verify_media, media_extension
@@ -84,8 +84,10 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         elif mode in ("httpx", "aria2c"):
             if mode == "aria2c":
                 log.info("aria2c_no_allowlist_fallback_httpx job_id=%s", jid)
-            size, sha = download(job["source_ref"], tmp / "source.bin", dl_http, getattr(settings, 'download_max_bytes', settings.max_bytes),
-                                 settings.download_timeout, hosts, resolver, check)
+            size, sha = download_parallel(job["source_ref"], tmp / "source.bin", dl_http, getattr(settings, 'download_max_bytes', settings.max_bytes),
+                                 settings.download_timeout, hosts, resolver, check,
+                                 getattr(settings, "httpx_parallel_connections", 8),
+                                 getattr(settings, "httpx_chunk_size_mb", 8) * 1024 * 1024)
         else:
             raise WorkerError("INVALID_DOWNLOADER", "Unknown downloader setting.", False)
         log.info("download_complete job_id=%s bytes=%s elapsed_s=%.1f", jid, size, time.monotonic()-started)
