@@ -41,6 +41,16 @@ class BackendClient:
 
     def complete(self, jid: str, **fields): return self._post(f"/jobs/{jid}/complete", {"lease_owner": self.worker_id, **fields})
 
+    def quality_state(self, source_asset_id: str):
+        r = self.http.get(f"/api/v1/worker/assets/{source_asset_id}/quality-state", headers={"X-Worker-Token": self.token})
+        if r.status_code >= 400:
+            try:
+                code = r.json()["error"]["code"]
+            except Exception:
+                code = "HTTP_ERROR"
+            raise ApiError(r.status_code, code)
+        return r.json()
+
     def register_variant(self, source_asset_id: str, **fields):
         return self._post(f"/assets/{source_asset_id}/variants", fields)
 
