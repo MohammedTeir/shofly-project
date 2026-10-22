@@ -14,6 +14,8 @@ def browse_cb(kind: str, offset: int) -> str: return f"bw:{CODE[kind]}:{offset}"
 def fav_cb(kind: str, item_id: str, on: bool) -> str: return f"fv:{CODE[kind]}:{item_id}:{int(on)}"
 def favlist_cb(offset: int) -> str: return f"fl:{offset}"
 def dl_cb(asset_id: str) -> str: return f"dl:{asset_id}"
+def quality_cb(kind: str, item_id: str) -> str: return f"ql:{CODE[kind]}:{item_id}"
+def episode_quality_cb(episode_id: str) -> str: return f"qe:{episode_id}"
 def season_cb(series_id: str, n: int) -> str: return f"se:{series_id}:{n}"
 
 
@@ -42,6 +44,10 @@ def parse(data: str | None):
             return ("fv", KIND[p[1]], p[2], p[3] == "1")
         if p[0] == "fl" and len(p) == 2 and 0 <= int(p[1]) <= 100000:
             return ("fl", int(p[1]))
+        if p[0] == "ql" and len(p) == 3 and p[1] in KIND and _uuid(p[2]):
+            return ("ql", KIND[p[1]], p[2])
+        if p[0] == "qe" and len(p) == 2 and _uuid(p[1]):
+            return ("qe", p[1])
         if p[0] == "dl" and len(p) == 2 and _uuid(p[1]):
             return ("dl", p[1])
         if p[0] == "se" and len(p) == 3 and _uuid(p[1]) and 0 <= int(p[2]) <= 999:
