@@ -3,6 +3,9 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery
 from tgbot import callbacks as cb
 from tgbot import screens as sc
+from tgbot import keyboards as kb
+from tgbot.formatting import asset_label
+import html
 from tgbot.api import ApiError
 from tgbot.localization import t
 
@@ -72,6 +75,29 @@ def make_router() -> Router:
         await api.set_favorite(session.token, p[1], p[2], p[3])
         text, markup = await sc.item_screen(api, session, p[1], p[2])
         await sc.show(c, text, markup, toast=t(session.lang, "fav_saved" if p[3] else "fav_removed"))
+
+    @router.callback_query(F.data.startswith("ql:"))
+    async def movie_qualities(c: CallbackQuery, api, session):
+        p = cb.parse(c.data)
+        if not p or p[1] != "movie":
+            return await c.answer()
+        item = await api.title(session.token, "movie", p[2])
+        assets = item.get("assets") or []
+        title = html.escape(item.get("title") or "")
+        heading = f"🎬 <b>{title}</b>\\n\\n🎞 <b>اختر جودة الفيديو</b>\\nاضغط على الجودة المناسبة لإرسال الملف إليك مباشرة.\\n\\n📦 الأحجام الفعلية موضحة بجانب كل جودة." if session.lang == "ar" else f"🎬 <b>{title}</b>\\n\\n🎞 <b>Choose video quality</b>\\nTap a quality to receive the file.\\n\\n📦 Actual file sizes are shown."
+        await sc.show(c, heading if assets else ("لا توجد جودات متاحة حاليًا." if session.lang == "ar" else "No qualities available."), kb.quality_kb(assets, session.lang, cb.item_cb("movie", p[2])))
+
+    @router.callback_query(F.data.startswith("qe:"))
+    async def episode_qualities(c: CallbackQuery, api, session):
+        p = cb.parse(c.data)
+        if not p:
+            return await c.answer()
+        result = await api.episode_qualities(session.token, p[1])
+        assets = result.get("assets") or []
+        season = result.get("season_number", 0)
+        title = html.escape(result.get("title") or f"Episode {result.get('episode_number', '')}")
+        heading = f"📺 <b>{title}</b> · S{season}E{result.get('episode_number', 0)}\\n\\n🎞 <b>اختر جودة الحلقة</b>\\n📦 اضغط على الجودة لإرسال الملف إليك." if session.lang == "ar" else f"📺 <b>{title}</b> · S{season}E{result.get('episode_number', 0)}\\n\\n🎞 <b>Choose episode quality</b>\\n📦 Tap to receive the file."
+        await sc.show(c, heading if assets else ("لا توجد جودات متاحة حاليًا." if session.lang == "ar" else "No qualities available."), kb.quality_kb(assets, session.lang, cb.season_cb(str(result["series_id"]), season)))
 
     @router.callback_query(F.data.startswith("dl:"))
     async def download(c: CallbackQuery, api, session, bot):
