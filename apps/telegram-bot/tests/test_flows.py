@@ -165,7 +165,10 @@ def test_send_file_button_copies_from_storage_with_forward_protection(make_api, 
         h = Harness(make_api())
         await h.tap(EN, f"it:m:{m.id}")
         buttons = [b for r in h.session.last().reply_markup.inline_keyboard for b in r]
-        send = next(b for b in buttons if b.callback_data == f"dl:{a.id}")
+        choose = next(b for b in buttons if b.callback_data == f"ql:m:{m.id}")
+        await h.tap(EN, choose.callback_data)
+        quality_buttons = [b for r in h.session.last().reply_markup.inline_keyboard for b in r]
+        send = next(b for b in quality_buttons if b.callback_data == f"dl:{a.id}")
         assert "1080p" in send.text and "3 MB" in send.text and "FID" not in str(h.session.last())
         await h.tap(EN, send.callback_data)
         (c,) = copies(h)
