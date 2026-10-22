@@ -19,6 +19,8 @@ class WorkerSettings(BaseSettings):
     tmp_dir: str = "/tmp/shofly"
     allowed_hosts: str = ""                      # optional extra allowlist (comma separated)
     downloader: str = "httpx"                    # httpx (default) | aria2c (allowlisted hosts only)
+    httpx_parallel_connections: int = 8
+    httpx_chunk_size_mb: int = 8
     aria2_connections: int = 4                 # 1-8 parallel connections per trusted source
     aria2_retries: int = 3                     # 1-5 attempts per transfer
     ffmpeg_verify: bool = False               # opt-in full decode before upload
