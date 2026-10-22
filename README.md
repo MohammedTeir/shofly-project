@@ -280,3 +280,12 @@ Subscription billing, Telegram Stars, automated metadata matching, recommendatio
 - FFmpeg re-encoding is CPU-intensive and can take significant time and disk space on Colab. Quality ladder bitrates are targets, not promises of exact output sizes or perceptual quality. Upload and storage usage multiply with each version.
 
 Check [GitHub Actions](https://github.com/MohammedTeir/shofly-project/actions) and perform a small, licensed test upload before enabling this workflow for valuable media.
+
+
+### Resume incomplete quality variants after Colab disconnects
+
+The Colab notebook now mounts Google Drive for **both HTTPX and aria2c** downloads and keeps the completed original under `MyDrive/Shofly/downloads/<import-job-uuid>/` while qualities remain missing. It records `quality_resume.json` only after the original is successfully committed, with its source asset ID, SHA-256, and probe metadata. On the next notebook run, `run_until_empty()` checks these manifests **before** claiming new imports, validates the retained original checksum in chunks, asks the backend which qualities are already verified, and encodes/uploads **only missing qualities**. It does **not** re-download the original or re-upload successful variants.
+
+**Prerequisites:** retain the same Google Drive folder; set `GENERATE_QUALITIES=true`; do not manually remove the retained source; use the latest backend and worker versions. Resumption works for imports processed after this update, not for older imports whose original files have already been removed. Originals awaiting quality completion are subject to the existing **seven-day orphan retention** cleanup; completed transfers are marked for **48-hour retention**. Retaining large original files consumes Google Drive quota. The backend still checks licensing rights and prevents resumed uploads for deleted or unauthorized titles. If the source file is missing or fails SHA-256 verification, the worker logs the issue and skips it instead of downloading from the original URL.
+
+This is **source-retention-based resumption**, not cloud retrieval from Telegram: it does not download the original from the private channel. Use a dedicated Drive folder with sufficient free space.
