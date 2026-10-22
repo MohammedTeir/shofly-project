@@ -50,3 +50,17 @@ def season(series_id: uuid.UUID, number: int, user: User = Depends(current_user)
     return {"season_number": se.season_number, "episodes": [
         {"id": e.id, "episode_number": e.episode_number, "title": e.title, "air_date": e.air_date,
          "assets": assets.get(e.id, [])} for e in eps]}
+
+
+@router.get("/episodes/{episode_id}/qualities")
+def episode_qualities(episode_id: uuid.UUID, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Return only rights-authorized, verified qualities for a published episode."""
+    episode = db.get(Episode, episode_id)
+    if episode is None:
+        raise AppError(404, "NOT_FOUND", "Not found.")
+    season = db.get(Season, episode.season_id)
+    if season is None or not is_visible(db, "series", season.series_id):
+        raise AppError(404, "NOT_FOUND", "Not found.")
+    assets = deliverable_assets(db, user, "episode", [episode_id]).get(episode_id, [])
+    return {"id": episode.id, "title": episode.title, "episode_number": episode.episode_number,
+            "season_number": season.season_number, "series_id": season.series_id, "assets": assets}
