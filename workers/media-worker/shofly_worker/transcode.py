@@ -8,7 +8,7 @@ LADDER = ((1080, "4500k", "128k"), (720, "2500k", "128k"),
 
 
 def generate_variants(source: Path, output_dir: Path, original_height: int,
-                      timeout: int = 7200, check=lambda: None, on_error=None):
+                      timeout: int = 7200, check=lambda: None, on_error=None, skip_qualities=()):
     """Yield (quality, path) one at a time to bound local disk usage.
 
     Never upscale; the original file is retained independently. FFmpeg failures
@@ -18,7 +18,7 @@ def generate_variants(source: Path, output_dir: Path, original_height: int,
         return
     output_dir.mkdir(parents=True, exist_ok=True)
     for height, video_rate, audio_rate in LADDER:
-        if height >= original_height:
+        if height >= original_height or f"{height}p" in skip_qualities:
             continue
         check()
         output = output_dir / f"{height}p.mp4"
