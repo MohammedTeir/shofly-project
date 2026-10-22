@@ -48,6 +48,7 @@ function Job({ j, reload }: { j: Json; reload(): void }) {
 function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: string }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState<string | null>(null);
+  const [replacement, setReplacement] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<unknown>(null);
   const { data, error, loading, reload } = useAsync(
     () => targetId ? api.get(`/admin/import-jobs/assets/${kind}/${targetId}`) : Promise.resolve({ items: [] }),
@@ -56,6 +57,14 @@ function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: 
     if (busy || (action === "deactivate" && !window.confirm(t("media_deactivate_confirm", { defaultValue: "Disable this video for viewers? The Telegram file will be retained." })))) return;
     setBusy(id); setActionError(null);
     try { await api.post(`/admin/import-jobs/assets/${id}/${action}`); reload(); }
+    catch (e) { setActionError(e); }
+    finally { setBusy(null); }
+  };
+  const replace = async (oldId: string) => {
+    const replacementId = replacement[oldId];
+    if (!replacementId || busy || !window.confirm(t("media_replace_confirm", { defaultValue: "Switch viewers to the selected verified file? The old Telegram message will be retained." }))) return;
+    setBusy(oldId); setActionError(null);
+    try { await api.post(`/admin/import-jobs/assets/${oldId}/replace`, { replacement_asset_id: replacementId }); reload(); }
     catch (e) { setActionError(e); }
     finally { setBusy(null); }
   };
@@ -69,6 +78,14 @@ function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: 
               <span className="text-sm">{asset.quality || "Video"}{asset.edition ? ` · ${asset.edition}` : ""}</span>
               <span className="text-xs text-muted">{(asset.size_bytes / 1048576).toFixed(1)} MB</span>
             </div><Mono>{asset.id}</Mono></div>
+            {asset.upload_status === "verified" && ((data as Json)?.items ?? []).some((a: Json) => a.id !== asset.id && a.upload_status === "verified") &&
+              <div className="flex flex-wrap gap-2"><Select aria-label={t("select_replacement", { defaultValue: "Replacement video" })}
+                value={replacement[asset.id] || ""} onChange={(e) => setReplacement({ ...replacement, [asset.id]: e.target.value })}>
+                <option value="">{t("select_replacement", { defaultValue: "Select replacement" })}</option>
+                {((data as Json).items as Json[]).filter((a) => a.id !== asset.id && a.upload_status === "verified").map((a) =>
+                  <option key={a.id} value={a.id}>{a.quality || "Video"} · {a.id.slice(0, 8)}</option>)}
+              </Select><Btn disabled={busy !== null || !replacement[asset.id]} onClick={() => replace(asset.id)}>
+                {t("replace_video", { defaultValue: "Replace" })}</Btn></div>}
             <Btn disabled={busy !== null} tone={asset.upload_status === "verified" ? "danger" : "accent"}
               onClick={() => change(asset.id, asset.upload_status === "verified" ? "deactivate" : "restore")}>
               {busy === asset.id ? t("loading") : asset.upload_status === "verified"
