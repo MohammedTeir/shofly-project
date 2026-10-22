@@ -1649,6 +1649,49 @@
         "summary": "Create"
       }
     },
+    "/api/v1/admin/import-jobs/assets/{asset_id}/cancel-cleanup": {
+      "post": {
+        "operationId": "cancel_media_cleanup_api_v1_admin_import_jobs_assets__asset_id__cancel_cleanup_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Media Cleanup"
+      }
+    },
     "/api/v1/admin/import-jobs/assets/{asset_id}/deactivate": {
       "post": {
         "description": "Revoke delivery immediately. Never delete the only copy from Telegram implicitly.",
