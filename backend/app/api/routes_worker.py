@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import worker_auth
 from app.audit import audit
 from app.core.config import get_settings
-from app.core.crypto import encrypt
+from app.core.crypto import encrypt, decrypt
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.imports.service import claim_next, claim_payload, owned_job, to_retry_or_fail, utcnow
@@ -125,3 +125,45 @@ def fail(jid: uuid.UUID, body: FailIn, db: Session = Depends(get_db)):
     to_retry_or_fail(job, body.error_code, body.error_message_safe, body.retryable)
     db.commit()
     return {"status": job.status}
+
+
+class CleanupResultIn(BaseModel):
+    success: bool
+    error_code: str | None = Field(None, pattern=r"^[A-Z0-9_]{3,40}$")
+
+
+@router.post("/cleanup/claim")
+def claim_cleanup(db: Session = Depends(get_db)):
+    """Claim one pending asset; encrypted storage references never reach the dashboard."""
+    asset = db.scalar(select(MediaAsset).where(MediaAsset.upload_status == "cleanup_pending",
+                 MediaAsset.provider == "telegram").order_by(MediaAsset.created_at)
+                 .with_for_update(skip_locked=True).limit(1))
+    if asset is None:
+        return {"asset": None}
+    refs = [decrypt(asset.provider_ref_encrypted)]
+    refs += [decrypt(ref) for ref in (asset.segment_refs_encrypted or [])]
+    # Refuse to delete any message referenced by a different asset.
+    messages = {(ref.split(":", 2)[0], ref.split(":", 2)[1]) for ref in refs}
+    for other in db.scalars(select(MediaAsset).where(MediaAsset.id != asset.id, MediaAsset.provider == "telegram")):
+        other_refs = [decrypt(other.provider_ref_encrypted)]
+        other_refs += [decrypt(ref) for ref in (other.segment_refs_encrypted or [])]
+        if messages & {(ref.split(":", 2)[0], ref.split(":", 2)[1]) for ref in other_refs}:
+            asset.upload_status = "inactive"
+            audit(db, None, "media.cleanup_blocked_shared", "media_asset", asset.id)
+            db.commit()
+            return {"asset": None, "blocked": True}
+    asset.upload_status = "cleanup_processing"
+    db.commit()
+    return {"asset": {"id": asset.id, "refs": list(dict.fromkeys(refs))}}
+
+
+@router.post("/cleanup/{asset_id}/finish")
+def finish_cleanup(asset_id: uuid.UUID, body: CleanupResultIn, db: Session = Depends(get_db)):
+    asset = db.scalar(select(MediaAsset).where(MediaAsset.id == asset_id).with_for_update())
+    if asset is None or asset.upload_status != "cleanup_processing":
+        raise AppError(409, "INVALID_CLEANUP_STATE", "Asset is not being cleaned up.")
+    asset.upload_status = "deleted" if body.success else "cleanup_failed"
+    audit(db, None, "media.cleanup_succeeded" if body.success else "media.cleanup_failed",
+          "media_asset", asset.id, {"error_code": None if body.success else body.error_code})
+    db.commit()
+    return {"id": asset.id, "status": asset.upload_status, "telegram_deleted": body.success}
