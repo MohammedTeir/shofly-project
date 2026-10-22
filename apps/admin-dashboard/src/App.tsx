@@ -25,7 +25,7 @@ function Shell() {
   const Page = PAGES[cur];
   return (
     <div className="mx-auto max-w-4xl px-4 pb-10">
-      <header className="sticky top-0 z-10 -mx-4 mb-4 flex items-center justify-between gap-2 bg-bg/95 px-4 py-3">
+      <header className="-mx-4 mb-4 flex flex-wrap items-center justify-between gap-2 bg-bg px-4 py-3">
         <h1 className="text-lg font-bold">{t("app_name")}</h1>
         <Btn onClick={() => i18n.changeLanguage(i18n.language === "ar" ? "en" : "ar")} aria-label={t("language")}>{i18n.language === "ar" ? "English" : "العربية"}</Btn>
       </header>
