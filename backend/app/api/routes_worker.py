@@ -13,7 +13,7 @@ from app.core.db import get_db
 from app.core.errors import AppError
 from app.imports.service import claim_next, claim_payload, owned_job, to_retry_or_fail, utcnow
 from app.imports.state import transition
-from app.models import MediaAsset, Movie
+from app.models import MediaAsset, Movie, ImportJob
 from app.rights import has_valid_rights
 
 router = APIRouter(prefix="/worker", dependencies=[Depends(worker_auth)])
@@ -202,3 +202,61 @@ def finish_cleanup(asset_id: uuid.UUID, body: CleanupResultIn, db: Session = Dep
         finalize_deleted_movie(db, asset.movie_id)
     db.commit()
     return {"id": asset_id, "status": "deleted" if body.success else "cleanup_failed", "telegram_deleted": body.success}
+
+
+class VariantIn(BaseModel):
+    provider_ref: str = Field(min_length=1, max_length=500)
+    segment_refs: list[str] = Field(default_factory=list, max_length=500)
+    size_bytes: int = Field(gt=0)
+    checksum_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    quality: str = Field(pattern=r"^(1080|720|480|360)p$")
+    duration_sec: int | None = Field(None, gt=0)
+    codec: str | None = Field(None, max_length=32)
+    audio_language: str | None = Field(None, max_length=32)
+
+
+@router.post("/assets/{source_asset_id}/variants")
+def register_variant(source_asset_id: uuid.UUID, body: VariantIn, db: Session = Depends(get_db)):
+    """Attach a verified, already-uploaded variant to a completed authorized import.
+
+    Worker-only. Every quality is an independent MediaAsset and therefore participates
+    in existing delivery authorization and movie cleanup.
+    """
+    source = db.scalar(select(MediaAsset).where(MediaAsset.id == source_asset_id).with_for_update())
+    if not source or source.upload_status != "verified" or source.provider != "telegram":
+        raise AppError(409, "INVALID_SOURCE_ASSET", "Source asset is unavailable.")
+    job = db.get(ImportJob, source.import_job_id) if source.import_job_id else None
+    if not job or job.status != "COMPLETED":
+        raise AppError(409, "INVALID_SOURCE_JOB", "Source import is not completed.")
+    if source.movie_id:
+        movie = db.get(Movie, source.movie_id)
+        if not movie or movie.status == "deleting":
+            raise AppError(409, "CONTENT_DELETING", "Content is being deleted.")
+    target_kind = "movie" if source.movie_id else "episode"
+    target_id = source.movie_id or source.episode_id
+    if not has_valid_rights(db, target_kind, target_id):
+        raise AppError(409, "BLOCKED_RIGHTS", "Rights are no longer valid.")
+    if body.segment_refs and body.segment_refs[0] != body.provider_ref:
+        raise AppError(400, "INVALID_SEGMENTS", "First segment must match primary reference.")
+    if any(not ref or len(ref) > 500 for ref in body.segment_refs):
+        raise AppError(400, "INVALID_SEGMENTS", "Invalid segment references.")
+    col = MediaAsset.movie_id if source.movie_id else MediaAsset.episode_id
+    existing = db.scalar(select(MediaAsset).where(col == target_id,
+                       MediaAsset.checksum_sha256 == body.checksum_sha256))
+    if existing:
+        if existing.upload_status != "verified":
+            raise AppError(409, "VARIANT_CONFLICT", "Existing variant is not available.")
+        return {"asset_id": existing.id, "duplicate": True}
+    asset = MediaAsset(id=uuid.uuid4(), import_job_id=source.import_job_id,
+                       provider="telegram", provider_ref_encrypted=encrypt(body.provider_ref),
+                       segment_refs_encrypted=[encrypt(x) for x in body.segment_refs] if body.segment_refs else None,
+                       size_bytes=body.size_bytes, checksum_sha256=body.checksum_sha256,
+                       duration_sec=body.duration_sec, quality=body.quality,
+                       codec=body.codec, audio_language=body.audio_language,
+                       upload_status="verified", visibility="private",
+                       **({"movie_id": target_id} if source.movie_id else {"episode_id": target_id}))
+    db.add(asset)
+    audit(db, None, "media.variant_created", "media_asset", asset.id,
+          {"source_asset_id": str(source_asset_id), "quality": body.quality})
+    db.commit()
+    return {"asset_id": asset.id, "duplicate": False}
