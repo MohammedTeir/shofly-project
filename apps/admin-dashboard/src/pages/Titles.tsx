@@ -59,6 +59,10 @@ function Detail({ sel, back }: { sel: Sel; back(): void }) {
   const { data, error, loading, reload } = useAsync(() => api.get(`/admin/catalog/${sel.kind}/${sel.id}`), [sel.id]);
   const [err, setErr] = useState<unknown>(null);
   const d = data as Json | undefined;
+  const deleteAll = () => {
+    if (!window.confirm(`Permanently delete ${d?.original_title}? Telegram files will be removed by the worker, then the title, import jobs, and metadata will be deleted. This cannot be undone.`)) return;
+    api.post(`/admin/catalog/movie/${sel.id}/delete-all`).then(() => { setErr(null); back(); }, setErr);
+  };
   const act = (path: string) => api.post(`/admin/catalog/${sel.kind}/${sel.id}/${path}`).then(() => { setErr(null); reload(); }, (e) => { setErr(e); reload(); });
   return (
     <div>
@@ -74,6 +78,7 @@ function Detail({ sel, back }: { sel: Sel; back(): void }) {
             {!d.metadata_verified && <Btn onClick={() => act("verify-metadata")}>{t("verify_metadata")}</Btn>}
             {d.status !== "published" ? <Btn tone="accent" onClick={() => act("publish")}>{t("publish")}</Btn>
               : <Btn tone="danger" onClick={() => window.confirm(t("confirm")) && act("unpublish")}>{t("unpublish")}</Btn>}
+            {sel.kind === "movie" && <Btn tone="danger" onClick={deleteAll}>Delete movie &amp; Telegram files</Btn>}
           </div><ErrorNote error={err} />
         </Section>
         <Translations sel={sel} d={d} />
