@@ -63,4 +63,25 @@ def test_invalid_worker_count(tmp_path):
     path = tmp_path / "test.bin"
     path.write_bytes(b"hello")
     with pytest.raises(ValueError, match="workers"):
-        asyncio.run(upload_parallel(FakeClient(), path, workers=9))
+        asyncio.run(upload_parallel(FakeClient(), path, workers=33))
+
+
+def test_four_connections_with_sixteen_workers(tmp_path):
+    payload = b"x" * (PART_SIZE * 17 + 31)
+    path = tmp_path / "multi.bin"
+    path.write_bytes(payload)
+    clients = [FakeClient() for _ in range(4)]
+    result = asyncio.run(upload_parallel(clients, path, workers=16))
+    assert result.parts == 18
+    assert all(c.parts for c in clients)
+    merged = {}
+    for c in clients:
+        merged.update(c.parts)
+    assert b"".join(merged[i] for i in range(result.parts)) == payload
+
+
+def test_more_connections_than_workers_rejected(tmp_path):
+    path = tmp_path / "test.bin"
+    path.write_bytes(b"hello")
+    with pytest.raises(ValueError, match="connections"):
+        asyncio.run(upload_parallel([FakeClient() for _ in range(5)], path, workers=4))
