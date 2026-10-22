@@ -13,7 +13,7 @@ from app.core.db import get_db
 from app.core.errors import AppError
 from app.imports.service import claim_next, claim_payload, owned_job, to_retry_or_fail, utcnow
 from app.imports.state import transition
-from app.models import MediaAsset
+from app.models import MediaAsset, Movie
 from app.rights import has_valid_rights
 
 router = APIRouter(prefix="/worker", dependencies=[Depends(worker_auth)])
@@ -165,7 +165,8 @@ def claim_cleanup(db: Session = Depends(get_db)):
     replacement = db.scalar(select(MediaAsset.id).where(
         col == target, MediaAsset.id != asset.id,
         MediaAsset.upload_status == "verified").limit(1))
-    if replacement is None:
+    deleting_movie = bool(asset.movie_id and db.scalar(select(Movie.id).where(Movie.id == asset.movie_id, Movie.status == "deleting")))
+    if replacement is None and not deleting_movie:
         asset.upload_status = "inactive"
         audit(db, None, "media.cleanup_blocked_last_copy", "media_asset", asset.id)
         db.commit()
@@ -182,7 +183,7 @@ def claim_cleanup(db: Session = Depends(get_db)):
             audit(db, None, "media.cleanup_blocked_shared", "media_asset", asset.id)
             db.commit()
             return {"asset": None, "blocked": True}
-    asset.upload_status = "cleanup_processing"
+    asset.upload_status = "cleaning"
     db.commit()
     return {"asset": {"id": asset.id, "refs": list(dict.fromkeys(refs))}}
 
@@ -190,10 +191,14 @@ def claim_cleanup(db: Session = Depends(get_db)):
 @router.post("/cleanup/{asset_id}/finish")
 def finish_cleanup(asset_id: uuid.UUID, body: CleanupResultIn, db: Session = Depends(get_db)):
     asset = db.scalar(select(MediaAsset).where(MediaAsset.id == asset_id).with_for_update())
-    if asset is None or asset.upload_status != "cleanup_processing":
+    if asset is None or asset.upload_status != "cleaning":
         raise AppError(409, "INVALID_CLEANUP_STATE", "Asset is not being cleaned up.")
     asset.upload_status = "deleted" if body.success else "cleanup_failed"
     audit(db, None, "media.cleanup_succeeded" if body.success else "media.cleanup_failed",
           "media_asset", asset.id, {"error_code": None if body.success else body.error_code})
+    if body.success and asset.movie_id:
+        from app.api.routes_admin_catalog import finalize_deleted_movie
+        db.flush()
+        finalize_deleted_movie(db, asset.movie_id)
     db.commit()
-    return {"id": asset.id, "status": asset.upload_status, "telegram_deleted": body.success}
+    return {"id": asset_id, "status": "deleted" if body.success else "cleanup_failed", "telegram_deleted": body.success}
