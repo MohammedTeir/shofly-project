@@ -92,14 +92,17 @@ class MTProtoTelegramProvider:
     name = "telegram"
 
     def __init__(self, api_id: int, api_hash: str, bot_token: str, chat_id: str,
-                 session_path: str, max_bytes: int = 2 * 1024**3, parallel_workers: int = 8):
+                 session_path: str, max_bytes: int = 2 * 1024**3, parallel_workers: int = 4, connections: int = 1):
         if not api_id or not api_hash or not bot_token or not chat_id:
             raise ValueError("MTProto API credentials and storage channel are required")
         self.api_id, self.api_hash, self.bot_token = api_id, api_hash, bot_token
         self.chat_id, self.session_path, self.max = int(chat_id), session_path, max_bytes
-        if not 1 <= parallel_workers <= 8:
+        if not 1 <= parallel_workers <= 32:
             raise ValueError("parallel_workers must be between 1 and 8")
+        if not 1 <= connections <= parallel_workers:
+            raise ValueError('connections must be between 1 and parallel_workers')
         self.parallel_workers = parallel_workers
+        self.connections = connections
         self._receipts = {}
 
     def _run(self, operation):
@@ -152,8 +155,22 @@ class MTProtoTelegramProvider:
         async def send(client):
             if self.parallel_workers > 1:
                 from shofly_worker.parallel_upload import upload_parallel
+                clients = [client]
                 try:
-                    uploaded = await upload_parallel(client, local_path, self.parallel_workers)
+                    if self.connections > 1:
+                        from telethon import TelegramClient
+                        for _ in range(self.connections - 1):
+                            extra = TelegramClient(None, self.api_id, self.api_hash)
+                            try:
+                                await extra.start(bot_token=self.bot_token)
+                                identity = await extra.get_me()
+                                if not identity or not identity.bot:
+                                    raise RuntimeError('Additional MTProto connection not authenticated as bot')
+                            except BaseException:
+                                await extra.disconnect()
+                                raise
+                            clients.append(extra)
+                    uploaded = await upload_parallel(clients, local_path, self.parallel_workers)
                 except Exception as exc:
                     log.warning("parallel_upload_failed exception_type=%s falling_back=sequential", type(exc).__name__)
                     # Only fall back when uploading parts fails. A send_file error
@@ -169,6 +186,9 @@ class MTProtoTelegramProvider:
                     message = await client.send_file(
                         self.chat_id, uploaded, force_document=not video_mode, supports_streaming=video_mode
                     )
+                finally:
+                    for extra in clients[1:]:
+                        await extra.disconnect()
             else:
                 progress = TransferProgress("upload")
                 progress.start(size)
