@@ -29,29 +29,6 @@ def loop(client, provider, settings, dl_http, max_cycles: int | None = None, sle
     """Check the queue, process everything claimable, sleep, repeat. Returns jobs processed (max_cycles is for tests)."""
     total, cycles = 0, 0
     while max_cycles is None or cycles < max_cycles:
-        # Only MTProto can verify message deletion. Other providers leave requests pending.
-        if isinstance(provider, MTProtoTelegramProvider):
-            try:
-                task = client.claim_cleanup()
-            except (httpx.HTTPError, Exception) as exc:
-                log.warning("cleanup_claim_failed reason=%s", type(exc).__name__)
-                task = None
-            if task:
-                success = True
-                try:
-                    for ref in task["refs"]:
-                        if not provider.delete_confirmed(ref):
-                            success = False
-                            break
-                except Exception as exc:
-                    log.warning("cleanup_delete_failed asset_id=%s reason=%s", task["id"], type(exc).__name__)
-                    success = False
-                try:
-                    client.finish_cleanup(task["id"], success, None if success else "TELEGRAM_DELETE_FAILED")
-                except Exception as exc:
-                    log.error("cleanup_result_not_saved asset_id=%s reason=%s", task["id"], type(exc).__name__)
-                if success:
-                    log.info("cleanup_confirmed asset_id=%s", task["id"])
         results = run_until_empty(client, provider, settings, dl_http)
         total += len(results); cycles += 1
         if results:
