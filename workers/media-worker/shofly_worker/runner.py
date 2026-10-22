@@ -157,8 +157,13 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                     registered = False
                     try:
                         variant_info = real_probe(variant_path)
-                        part_limit = getattr(settings, "segment_max_bytes", 0) or getattr(provider, "max", None)
-                        if getattr(settings, "split_large_media", False) and part_limit and variant_path.stat().st_size > part_limit:
+                        provider_limit = getattr(provider, "max", None)
+                        part_limit = getattr(settings, "segment_max_bytes", 0) or provider_limit
+                        if part_limit and provider_limit:
+                            part_limit = min(part_limit, provider_limit)
+                        if part_limit and variant_path.stat().st_size > part_limit:
+                            if not getattr(settings, "split_large_media", False):
+                                raise WorkerError("FILE_TOO_LARGE", "Generated quality exceeds Telegram upload limit.", False)
                             variant_parts = split_playable(variant_path, tmp / ("quality_segments_" + quality),
                                                            part_limit, variant_info["duration_sec"])
                         else:
