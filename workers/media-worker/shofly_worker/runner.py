@@ -54,7 +54,7 @@ def process_qualities(client, provider, settings, source: Path, tmp: Path, jid: 
                     height = int(str(info.get("quality") or "0p").removesuffix("p"))
                     for quality, variant_path in generate_variants(
                         source, tmp / "qualities", height, getattr(settings, "transcode_timeout", 7200),
-                        check=check,
+                        check=check, skip_qualities=completed_qualities,
                         on_error=lambda q, code: log.warning("quality_transcode_failed job_id=%s quality=%s code=%s", jid, q, code)
                     ):
                         if quality in completed_qualities:
@@ -148,7 +148,11 @@ def resume_qualities(client, provider, settings) -> list[str]:
             source = tmp / state["source_file"]
             if source.parent != tmp or not source.is_file() or source.is_symlink():
                 continue
-            if hashlib.sha256(source.read_bytes()).hexdigest() != state["source_sha256"]:
+            digest = hashlib.sha256()
+            with source.open("rb") as original:
+                for chunk in iter(lambda: original.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != state["source_sha256"]:
                 log.warning("quality_resume_checksum_mismatch job_id=%s", jid)
                 continue
             touch_active(tmp)
