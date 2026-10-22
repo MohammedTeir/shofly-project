@@ -268,3 +268,11 @@ Later fixes: the bot health listener now sends a computed `Content-Length`, and 
 - Revoke temporary Telegram tokens through `@BotFather` after testing.
 - Keep `TELEGRAM_BOT_TOKEN`, `BOT_API_TOKEN`, and `WORKER_API_TOKEN` as separate secrets.
 - Use Neon PostgreSQL rather than local SQLite for deployed data because Render service files are ephemeral.
+
+## October 2026 operational changes (MTProto, cleanup and deployment)
+
+- Large media imports use the Colab media worker with Telethon MTProto, not the hosted Bot API's 50 MB upload path. The worker downloads and probes media, uploads it to the private Telegram storage channel, verifies the uploaded message and reports completion. `notebooks/media_worker.ipynb` configures `MTPROTO_PARALLEL_WORKERS=4`.
+- Parallel upload diagnostics include `upload_parallel_metrics` roughly every 30 seconds (`window_mb_s`, `active`, `peak_active`, `requests`, `retries`, `avg_request_ms`) and `upload_parallel_summary` on completion. In one 1,202.1 MiB Colab run, four workers uploaded in 385 seconds at 3.12 MiB/s with zero retries; this is an observation, not a performance guarantee.
+- The admin movie detail page now includes **Delete movie & Telegram files**. It stages the movie as `deleting` and queues its registered Telegram assets for cleanup. Run the MTProto worker to remove and confirm the storage messages. The backend then removes movie metadata, associated rights, favorites, collection membership, media records and related import jobs after all registered assets report `deleted`. Active imports block deletion. This destructive path has **not yet passed end-to-end production testing**: do not use it on irreplaceable content without backups and validation. The workflow cannot discover Telegram messages whose references were previously overwritten or lost (for example an older .bin message).
+- The backend's OpenAPI snapshot must be updated whenever API endpoints change; CI checks it. A Vercel Hobby/free project may hit a daily deployment quota; code commits can continue while new frontend deployments are blocked.
+- Earlier sections describe the initial Bot API worker and deployment checklist and may be superseded by the MTProto-specific instructions above.
