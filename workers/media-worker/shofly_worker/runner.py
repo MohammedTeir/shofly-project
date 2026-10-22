@@ -144,6 +144,53 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                 except Exception:
                     log.warning("duplicate_cleanup_failed job_id=%s", jid)
         log.info("job_completed job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
+        if getattr(settings, "generate_qualities", False) and not receipt.get("duplicate"):
+            # The original is committed first. Variant failures never roll it back.
+            try:
+                from shofly_worker.transcode import generate_variants
+                from shofly_worker.probe import probe as real_probe
+                height = int(str(info.get("quality") or "0p").removesuffix("p"))
+                for quality, variant_path in generate_variants(
+                    source, tmp / "qualities", height, getattr(settings, "transcode_timeout", 7200)
+                ):
+                    variant_refs = []
+                    registered = False
+                    try:
+                        variant_info = real_probe(variant_path)
+                        part_limit = getattr(settings, "segment_max_bytes", 0) or getattr(provider, "max", None)
+                        if getattr(settings, "split_large_media", False) and part_limit and variant_path.stat().st_size > part_limit:
+                            variant_parts = split_playable(variant_path, tmp / ("quality_segments_" + quality),
+                                                           part_limit, variant_info["duration_sec"])
+                        else:
+                            variant_parts = [variant_path]
+                        for variant_part in variant_parts:
+                            variant_ref = provider.upload(variant_part, variant_info)
+                            variant_refs.append(variant_ref)
+                            if not provider.verify(variant_ref, variant_part.stat().st_size):
+                                raise WorkerError("VERIFY_FAILED", "Quality upload could not be verified.", True)
+                        variant_hash = hashlib.sha256()
+                        with variant_path.open("rb") as variant_file:
+                            for block in iter(lambda: variant_file.read(1024 * 1024), b""):
+                                variant_hash.update(block)
+                        result = client.register_variant(
+                            str(receipt["asset_id"]), provider_ref=variant_refs[0],
+                            segment_refs=variant_refs if len(variant_refs) > 1 else [],
+                            size_bytes=variant_path.stat().st_size,
+                            checksum_sha256=variant_hash.hexdigest(), quality=quality,
+                            duration_sec=variant_info["duration_sec"], codec=variant_info.get("codec"),
+                            audio_language=variant_info.get("audio_language"))
+                        registered = not result.get("duplicate")
+                        log.info("quality_ready job_id=%s quality=%s bytes=%d", jid, quality, variant_path.stat().st_size)
+                    finally:
+                        if not registered:
+                            for orphan_ref in variant_refs:
+                                try:
+                                    provider.delete(orphan_ref)
+                                except Exception:
+                                    log.warning("quality_orphan_cleanup_failed job_id=%s quality=%s", jid, quality)
+                        variant_path.unlink(missing_ok=True)
+            except Exception as exc:
+                log.warning("quality_generation_incomplete job_id=%s reason=%s", jid, type(exc).__name__)
         return "COMPLETED"
     except LeaseLost:
         retain_partial = persistent
