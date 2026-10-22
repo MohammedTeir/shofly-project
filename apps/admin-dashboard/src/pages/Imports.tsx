@@ -60,6 +60,15 @@ function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: 
     catch (e) { setActionError(e); }
     finally { setBusy(null); }
   };
+  const cleanup = async (asset: Json) => {
+    if (busy) return;
+    const pending = asset.upload_status === "cleanup_pending";
+    if (!pending && !window.confirm(t("media_cleanup_confirm", { defaultValue: "Request storage cleanup for this disabled file? This does not delete Telegram messages yet." }))) return;
+    setBusy(asset.id); setActionError(null);
+    try { await api.post(`/admin/import-jobs/assets/${asset.id}/${pending ? "cancel-cleanup" : "request-cleanup"}`); reload(); }
+    catch (e) { setActionError(e); }
+    finally { setBusy(null); }
+  };
   const replace = async (oldId: string) => {
     const replacementId = replacement[oldId];
     if (!replacementId || busy || !window.confirm(t("media_replace_confirm", { defaultValue: "Switch viewers to the selected verified file? The old Telegram message will be retained." }))) return;
@@ -86,11 +95,17 @@ function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: 
                   <option key={a.id} value={a.id}>{a.quality || "Video"} · {a.id.slice(0, 8)}</option>)}
               </Select><Btn disabled={busy !== null || !replacement[asset.id]} onClick={() => replace(asset.id)}>
                 {t("replace_video", { defaultValue: "Replace" })}</Btn></div>}
-            <Btn disabled={busy !== null} tone={asset.upload_status === "verified" ? "danger" : "accent"}
+            {["inactive", "cleanup_pending"].includes(asset.upload_status) &&
+              <Btn disabled={busy !== null} onClick={() => cleanup(asset)}>
+                {asset.upload_status === "cleanup_pending"
+                  ? t("cancel_cleanup", { defaultValue: "Cancel cleanup" })
+                  : t("request_cleanup", { defaultValue: "Request cleanup" })}
+              </Btn>}
+            {asset.upload_status !== "cleanup_pending" && <Btn disabled={busy !== null} tone={asset.upload_status === "verified" ? "danger" : "accent"}
               onClick={() => change(asset.id, asset.upload_status === "verified" ? "deactivate" : "restore")}>
               {busy === asset.id ? t("loading") : asset.upload_status === "verified"
                 ? t("disable_video", { defaultValue: "Disable" }) : t("restore_video", { defaultValue: "Restore" })}
-            </Btn>
+            </Btn>}
           </Row>)}
       </LoadBox>}
     <p className="mt-2 text-xs text-muted">{t("media_retained_notice", { defaultValue: "Disabling a video blocks delivery but does not delete its Telegram storage message." })}</p>
