@@ -104,9 +104,7 @@ def complete(jid: uuid.UUID, body: CompleteIn, db: Session = Depends(get_db)):
     if dup and dup.upload_status in ("inactive", "cleanup_pending", "cleanup_failed"):
         # Same bytes but a fresh Telegram upload: replace the stale storage reference
         # atomically, preserving the unique checksum constraint and the asset ID.
-        # Reject a replacement while another worker is actively deleting the old message.
-        old_ref = dup.provider_ref_encrypted
-        old_segments = dup.segment_refs_encrypted
+        # In-flight cleanup_processing is intentionally excluded.
         dup.provider = body.provider
         dup.provider_ref_encrypted = encrypt(body.provider_ref)
         dup.segment_refs_encrypted = [encrypt(ref) for ref in body.segment_refs] if body.segment_refs else None
