@@ -21,9 +21,6 @@ log = logging.getLogger('shofly_worker')
 
 
 async def upload_parallel(client, path: Path, workers: int = 4, retries: int = 2):
-    clients = list(client) if isinstance(client, (list, tuple)) else [client]
-    if not clients or len(clients) > workers:
-        raise ValueError("connection count must be between 1 and workers")
     if not 1 <= workers <= 8:
         raise ValueError("workers must be between 1 and 8")
     size = path.stat().st_size
@@ -47,7 +44,7 @@ async def upload_parallel(client, path: Path, workers: int = 4, retries: int = 2
     for index in range(parts):
         queue.put_nowait(index)
 
-    async def worker(connection):
+    async def worker():
         nonlocal uploaded, last_report, last_bytes, active, peak, attempts, retried, latency
         with path.open("rb") as stream:
             while True:
@@ -69,7 +66,7 @@ async def upload_parallel(client, path: Path, workers: int = 4, retries: int = 2
                         peak = max(peak, active)
                         t0 = time.monotonic()
                         try:
-                            accepted = await connection(request)
+                            accepted = await client(request)
                             if not accepted:
                                 raise RuntimeError("Telegram rejected upload part")
                             break
@@ -92,7 +89,7 @@ async def upload_parallel(client, path: Path, workers: int = 4, retries: int = 2
                 finally:
                     queue.task_done()
 
-    tasks = [asyncio.create_task(worker(clients[i % len(clients)])) for i in range(min(workers, parts))]
+    tasks = [asyncio.create_task(worker()) for _ in range(min(workers, parts))]
     try:
         await asyncio.gather(*tasks)
     except BaseException:
@@ -103,7 +100,7 @@ async def upload_parallel(client, path: Path, workers: int = 4, retries: int = 2
     if uploaded != size:
         raise RuntimeError("Upload byte count mismatch")
     progress.finish(uploaded)
-    log.info('upload_parallel_summary workers=%d connections=%d parts=%d elapsed_s=%.1f avg_mb_s=%.2f peak_active=%d requests=%d retries=%d avg_request_ms=%.0f', workers, len(clients), parts, time.monotonic()-started, size/1048576/max(time.monotonic()-started,0.001), peak, attempts, retried, 1000*latency/max(attempts,1))
+    log.info('upload_parallel_summary workers=%d parts=%d elapsed_s=%.1f avg_mb_s=%.2f peak_active=%d requests=%d retries=%d avg_request_ms=%.0f', workers, parts, time.monotonic()-started, size/1048576/max(time.monotonic()-started,0.001), peak, attempts, retried, 1000*latency/max(attempts,1))
     if big:
         return types.InputFileBig(file_id, parts, path.name)
     import hashlib
