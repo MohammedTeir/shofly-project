@@ -1695,7 +1695,7 @@
     },
     "/api/v1/admin/import-jobs/assets/{asset_id}/replace": {
       "post": {
-        "description": "Atomically switch delivery to an already verified replacement for the same title.\\n\\nTelegram messages are deliberately retained; physical deletion requires a separate,\\nfailure-aware storage cleanup workflow. This endpoint is safe to retry.",
+        "description": "Atomically switch delivery to an already verified replacement for the same title.\n\nTelegram messages are deliberately retained; physical deletion requires a separate,\nfailure-aware storage cleanup workflow. This endpoint is safe to retry.",
         "operationId": "replace_media_asset_api_v1_admin_import_jobs_assets__asset_id__replace_post",
         "parameters": [
           {
