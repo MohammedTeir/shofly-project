@@ -186,6 +186,11 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                             audio_language=variant_info.get("audio_language"))
                         registered = not result.get("duplicate")
                         log.info("quality_ready job_id=%s quality=%s bytes=%d", jid, quality, variant_path.stat().st_size)
+                    except Exception as exc:
+                        # One quality's upload failure must not prevent later qualities.
+                        # Unregistered Telegram uploads are removed in the finally block.
+                        log.warning("quality_upload_failed job_id=%s quality=%s reason=%s",
+                                    jid, quality, type(exc).__name__)
                     finally:
                         if not registered:
                             for orphan_ref in variant_refs:
