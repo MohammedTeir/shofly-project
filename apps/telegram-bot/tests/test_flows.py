@@ -220,3 +220,58 @@ def test_storage_error_is_reported_without_details(make_api, db):
         await h.tap(EN, f"dl:{a.id}")
         assert [x for x in h.session.calls if isinstance(x, AnswerCallbackQuery)][-1].text == t("en", "delivery_failed")
     asyncio.run(go())
+
+
+def test_movie_quality_picker_orders_real_sizes_and_delivers_selected_asset(make_api, db):
+    m, original = tg_movie(db)
+    low = MediaAsset(movie_id=m.id, provider="telegram",
+                     provider_ref_encrypted=encrypt("-1009:43:LOW"), size_bytes=1024 * 1024,
+                     checksum_sha256="f" * 64, quality="480p", upload_status="verified")
+    db.add(low); db.commit()
+
+    async def go():
+        h = Harness(make_api())
+        await h.tap(EN, f"it:m:{m.id}")
+        await h.tap(EN, f"ql:m:{m.id}")
+        buttons = [b for row in h.session.last().reply_markup.inline_keyboard for b in row]
+        quality = [b for b in buttons if b.callback_data.startswith("dl:")]
+        assert [b.callback_data for b in quality] == [f"dl:{original.id}", f"dl:{low.id}"]
+        assert "3 MB" in quality[0].text and "1 MB" in quality[1].text
+        assert "LOW" not in str(h.session.last())
+        await h.tap(EN, f"dl:{low.id}")
+        assert copies(h)[-1].message_id == 43
+    asyncio.run(go())
+
+
+def test_episode_quality_picker_selects_episode_file(make_api, db):
+    from datetime import timedelta, timezone
+    series = TvSeries(original_title="Quality Show", status="published", metadata_verified=True)
+    db.add(series); db.flush()
+    season = Season(series_id=series.id, season_number=2)
+    db.add(season); db.flush()
+    episode = Episode(season_id=season.id, episode_number=3, title="The <Pilot>")
+    db.add(episode); db.flush()
+    asset = MediaAsset(episode_id=episode.id, provider="telegram",
+                       provider_ref_encrypted=encrypt("-1009:57:EP"), size_bytes=2 * 1048576,
+                       checksum_sha256="d" * 64, quality="720p", upload_status="verified")
+    db.add(asset)
+    now = datetime.now(timezone.utc)
+    db.add(ContentRight(content_kind="episode", content_id=episode.id, license_type="o",
+                        proof_ref_encrypted="x", telegram_allowed=True, territories=["ALL"],
+                        valid_from=now - timedelta(days=1), valid_until=now + timedelta(days=5),
+                        review_status="APPROVED"))
+    db.commit()
+    make_visible(db, series)
+
+    async def go():
+        h = Harness(make_api())
+        await h.tap(EN, f"se:{series.id}:2")
+        buttons = [b for row in h.session.last().reply_markup.inline_keyboard for b in row]
+        assert any(b.callback_data == f"qe:{episode.id}" for b in buttons)
+        await h.tap(EN, f"qe:{episode.id}")
+        assert "&lt;Pilot&gt;" in h.session.last().text
+        buttons = [b for row in h.session.last().reply_markup.inline_keyboard for b in row]
+        assert any(b.callback_data == f"dl:{asset.id}" and "720p" in b.text for b in buttons)
+        await h.tap(EN, f"dl:{asset.id}")
+        assert copies(h)[-1].message_id == 57
+    asyncio.run(go())
