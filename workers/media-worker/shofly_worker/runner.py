@@ -184,8 +184,39 @@ def _report(client, jid, code, msg, retryable):
         log.info("job_failure_report_accepted job_id=%s error_code=%s", jid, code)
 
 
+def process_cleanup(client, provider) -> str | None:
+    """Process one explicitly requested cleanup, including from the Colab notebook."""
+    if not hasattr(provider, "delete_confirmed"):
+        return None
+    task = client.claim_cleanup()
+    if not task:
+        return None
+    success = True
+    try:
+        for ref in task["refs"]:
+            if not provider.delete_confirmed(ref):
+                success = False
+                break
+    except Exception as exc:
+        log.warning("cleanup_delete_failed asset_id=%s reason=%s", task["id"], type(exc).__name__)
+        success = False
+    client.finish_cleanup(task["id"], success, None if success else "TELEGRAM_DELETE_FAILED")
+    log.info("cleanup_result asset_id=%s confirmed=%s", task["id"], success)
+    return "CLEANUP_DELETED" if success else "CLEANUP_FAILED"
+
+
 def run_until_empty(client, provider, settings, dl_http, max_jobs: int = 100, **kw) -> list[str]:
     results = []
+    # Cleanup is also polled when no import jobs are available.
+    for _ in range(min(max_jobs, 100)):
+        try:
+            cleanup_result = process_cleanup(client, provider)
+        except Exception as exc:
+            log.warning("cleanup_processing_interrupted reason=%s", type(exc).__name__)
+            break
+        if cleanup_result is None:
+            break
+        results.append(cleanup_result)
     if getattr(settings, "persistent_download_dir", "") and getattr(settings, "downloader", "httpx") == "aria2c":
         try:
             cleanup(settings.persistent_download_dir)
