@@ -248,3 +248,10 @@ def test_concurrent_claims_have_exactly_one_winner_on_postgres(db):
         results = list(ex.map(attempt, range(8)))
     assert len([r for r in results if r]) == 1
     db.expire_all(); assert db.get(ImportJob, j.id).attempts == 1
+
+
+def test_userdrive_8443_exception_and_other_ports_blocked():
+    assert ssrf.validate_source_url("https://d900.userdrive.org:8443/d/example", set()) == "d900.userdrive.org"
+    for url in ("https://other.userdrive.org:8443/d/example", "https://d900.userdrive.org:8080/d/example"):
+        with pytest.raises(ssrf.UnsafeURL):
+            ssrf.validate_source_url(url, set())
