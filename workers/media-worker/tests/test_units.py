@@ -116,3 +116,45 @@ def test_userdrive_8443_worker_exception_and_other_hosts_blocked():
     check_url("https://d900.userdrive.org:8443/d/example", resolver=PUBLIC)
     with pytest.raises(UnsafeURL):
         check_url("https://other.userdrive.org:8443/d/example", resolver=PUBLIC)
+
+
+def test_httpx_parallel_ranges_and_fallback(tmp_path):
+    import hashlib
+    from shofly_worker.downloader import download_parallel
+    payload = b"abcd" * (1024 * 1024)
+    calls = []
+    def handler(req):
+        requested = req.headers.get("range", "")
+        calls.append(requested)
+        if requested == "bytes=0-0":
+            return httpx.Response(206, headers={"content-range": f"bytes 0-0/{len(payload)}"}, content=payload[:1])
+        a, b = map(int, requested.removeprefix("bytes=").split("-"))
+        return httpx.Response(206, headers={"content-range": f"bytes {a}-{b}/{len(payload)}"}, content=payload[a:b+1])
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    size, digest = download_parallel(URL, tmp_path / "parallel.bin", http, len(payload)+1, 30,
+                                     resolver=PUBLIC, connections=4, chunk_size=1024*1024)
+    assert size == len(payload)
+    assert digest == hashlib.sha256(payload).hexdigest()
+    assert (tmp_path / "parallel.bin").read_bytes() == payload
+    assert len(calls) == 5
+
+    def no_ranges(req):
+        return httpx.Response(200, content=b"fallback")
+    http2 = httpx.Client(transport=httpx.MockTransport(no_ranges))
+    size, digest = download_parallel(URL, tmp_path / "fallback.bin", http2, 100, 30,
+                                     resolver=PUBLIC, connections=4)
+    assert size == 8 and (tmp_path / "fallback.bin").read_bytes() == b"fallback"
+
+
+def test_httpx_parallel_rejects_invalid_ranges(tmp_path):
+    from shofly_worker.downloader import download_parallel
+    def handler(req):
+        if req.headers.get("range") == "bytes=0-0":
+            return httpx.Response(206, headers={"content-range": "bytes 0-0/2097152"}, content=b"a")
+        return httpx.Response(200, content=b"incorrect")
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(WorkerError) as exc:
+        download_parallel(URL, tmp_path / "bad.bin", http, 3000000, 30,
+                          resolver=PUBLIC, connections=4, chunk_size=1048576)
+    assert exc.value.code == "INVALID_RANGE"
+    assert not (tmp_path / "bad.bin").exists()
