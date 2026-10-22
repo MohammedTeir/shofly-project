@@ -13,7 +13,7 @@ from app.core.db import get_db
 from app.core.errors import AppError
 from app.imports.ssrf import UnsafeURL, validate_source_url
 from app.imports.state import transition
-from app.models import Episode, ImportJob, Movie, User
+from app.models import Episode, ImportJob, MediaAsset, Movie, User
 from app.rights import has_valid_rights
 
 router = APIRouter(prefix="/admin/import-jobs")
@@ -158,3 +158,43 @@ def cancel(jid: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(g
     audit(db, admin.id, "import.cancel", "import_job", j.id)
     db.commit()
     return out(j)
+
+
+@router.get("/assets/{kind}/{target_id}")
+def list_media_assets(kind: Literal["movie", "episode"], target_id: uuid.UUID,
+                      admin: User = Depends(staff), db: Session = Depends(get_db)):
+    """List stored variants without disclosing private Telegram references."""
+    model = Movie if kind == "movie" else Episode
+    if db.get(model, target_id) is None:
+        raise AppError(404, "NOT_FOUND", "Target does not exist.")
+    col = MediaAsset.movie_id if kind == "movie" else MediaAsset.episode_id
+    assets = db.scalars(select(MediaAsset).where(col == target_id).order_by(MediaAsset.created_at.desc()))
+    return {"items": [{"id": a.id, "quality": a.quality, "edition": a.edition,
+                       "size_bytes": a.size_bytes, "checksum_sha256": a.checksum_sha256,
+                       "upload_status": a.upload_status, "created_at": a.created_at}
+                      for a in assets]}
+
+
+@router.post("/assets/{asset_id}/deactivate")
+def deactivate_media_asset(asset_id: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(get_db)):
+    """Revoke delivery immediately. Never delete the only copy from Telegram implicitly."""
+    a = db.scalar(select(MediaAsset).where(MediaAsset.id == asset_id).with_for_update())
+    if a is None:
+        raise AppError(404, "NOT_FOUND", "Asset does not exist.")
+    if a.upload_status != "inactive":
+        a.upload_status = "inactive"
+        audit(db, admin.id, "media.deactivate", "media_asset", a.id)
+        db.commit()
+    return {"id": a.id, "upload_status": a.upload_status, "telegram_deleted": False}
+
+
+@router.post("/assets/{asset_id}/restore")
+def restore_media_asset(asset_id: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(get_db)):
+    a = db.scalar(select(MediaAsset).where(MediaAsset.id == asset_id).with_for_update())
+    if a is None:
+        raise AppError(404, "NOT_FOUND", "Asset does not exist.")
+    if a.upload_status != "verified":
+        a.upload_status = "verified"
+        audit(db, admin.id, "media.restore", "media_asset", a.id)
+        db.commit()
+    return {"id": a.id, "upload_status": a.upload_status}
