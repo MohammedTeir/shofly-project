@@ -44,6 +44,43 @@ function Job({ j, reload }: { j: Json; reload(): void }) {
   );
 }
 
+
+function StoredMedia({ kind, targetId }: { kind: "movie" | "episode"; targetId: string }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
+  const { data, error, loading, reload } = useAsync(
+    () => targetId ? api.get(`/admin/import-jobs/assets/${kind}/${targetId}`) : Promise.resolve({ items: [] }),
+    [kind, targetId]);
+  const change = async (id: string, action: "deactivate" | "restore") => {
+    if (busy || (action === "deactivate" && !window.confirm(t("media_deactivate_confirm", { defaultValue: "Disable this video for viewers? The Telegram file will be retained." })))) return;
+    setBusy(id); setActionError(null);
+    try { await api.post(`/admin/import-jobs/assets/${id}/${action}`); reload(); }
+    catch (e) { setActionError(e); }
+    finally { setBusy(null); }
+  };
+  return <Section title={t("stored_media", { defaultValue: "Stored video files" })}>
+    {!targetId ? <p className="text-sm text-muted">{t("media_select_target", { defaultValue: "Select a movie or episode above to manage its files." })}</p> :
+      <LoadBox error={error} loading={loading} reload={reload}>
+        {((data as Json)?.items ?? []).length === 0 ? <Msg text={t("empty")} /> :
+          ((data as Json).items as Json[]).map((asset) => <Row key={asset.id}>
+            <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2">
+              <Badge text={asset.upload_status} tone={asset.upload_status === "verified" ? "ok" : "warn"} />
+              <span className="text-sm">{asset.quality || "Video"}{asset.edition ? ` · ${asset.edition}` : ""}</span>
+              <span className="text-xs text-muted">{(asset.size_bytes / 1048576).toFixed(1)} MB</span>
+            </div><Mono>{asset.id}</Mono></div>
+            <Btn disabled={busy !== null} tone={asset.upload_status === "verified" ? "danger" : "accent"}
+              onClick={() => change(asset.id, asset.upload_status === "verified" ? "deactivate" : "restore")}>
+              {busy === asset.id ? t("loading") : asset.upload_status === "verified"
+                ? t("disable_video", { defaultValue: "Disable" }) : t("restore_video", { defaultValue: "Restore" })}
+            </Btn>
+          </Row>)}
+      </LoadBox>}
+    <p className="mt-2 text-xs text-muted">{t("media_retained_notice", { defaultValue: "Disabling a video blocks delivery but does not delete its Telegram storage message." })}</p>
+    <ErrorNote error={actionError} />
+  </Section>;
+}
+
 export default function Imports() {
   const { t } = useTranslation();
   const [status, setStatus] = useState(""); const [url, setUrl] = useState(""); const [err, setErr] = useState<unknown>(null);
@@ -104,6 +141,7 @@ export default function Imports() {
         <div className="mt-2 flex gap-2"><Btn onClick={kind === "movie" ? reloadMovies : reloadSeries}>{t("retry")}</Btn>{kind === "episode" && <Btn onClick={reloadEpisodes}>{t("retry_job")}</Btn>}</div>
         <ErrorNote error={err} />
       </Section>
+      <StoredMedia kind={kind} targetId={selectedId} />
       <Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">{t("all")}</option>
         {["NEEDS_REVIEW", "READY", "DOWNLOADING", "RETRY_WAIT", "FAILED", "BLOCKED_RIGHTS", "COMPLETED", "CANCELLED"].map((s) => <option key={s}>{s}</option>)}</Select>
       <div className="mt-3 rounded-card bg-surface px-4">
