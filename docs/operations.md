@@ -37,3 +37,14 @@ Roll back code: redeploy the previous image/commit. If the newer release added m
 `docker compose logs backend` prints one JSON line per request (id, method, path, status, ms; no query strings or tokens).
 Repeated `RETRY_WAIT`/`FAILED` jobs, 5xx rates, and Admin Overview's "rights expiring in 14 days" are the signals available today;
 automated alerting is not built.
+
+
+## Movie-level permanent deletion (October 2026; validation required)
+
+The admin movie detail screen has **Delete movie & Telegram files**. Confirming it calls `POST /api/v1/admin/catalog/movie/{item_id}/delete-all`, marks the movie `deleting` (no longer published), and queues registered Telegram assets for MTProto cleanup. Run the Colab worker's cleanup loop. The worker calls `POST /api/v1/worker/cleanup/claim`, deletes messages from the storage channel and calls `POST /api/v1/worker/cleanup/{asset_id}/finish` with the verified result. When every registered asset has status `deleted`, the backend finalizer removes the movie and its linked import jobs, rights, translations, favorites and collection entries.
+
+If cleanup fails, do not manually delete database rows or the remaining Telegram references. Diagnose the worker and retry the failed cleanup deliberately. The workflow only knows Telegram message references still in the database; earlier replaced .bin messages may remain orphaned and require separate channel inspection. **This flow has not yet been validated end-to-end and must not be treated as production-safe.** Back up the database and verify Telegram permissions first. The old last-copy protection still applies to individual asset cleanup, not the explicit whole-movie delete operation.
+
+## Parallel upload diagnostics
+
+The Colab notebook configures four MTProto parallel workers. Look for `upload_parallel_metrics` at 30-second intervals and `upload_parallel_summary` after upload. Interpret `peak_active=4` as four simultaneous outstanding upload requests; `retries=0` means no retry was recorded. Observed performance is environment-specific and can change between runs.
