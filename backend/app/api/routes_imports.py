@@ -233,3 +233,36 @@ def replace_media_asset(asset_id: uuid.UUID, body: ReplaceAssetIn,
     db.commit()
     return {"old_asset_id": old.id, "replacement_asset_id": new.id,
             "old_status": "inactive", "replacement_status": "verified", "telegram_deleted": False}
+
+
+@router.post("/assets/{asset_id}/request-cleanup")
+def request_media_cleanup(asset_id: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(get_db)):
+    """Mark an inactive Telegram asset for operator-controlled storage cleanup.
+
+    This does NOT claim that Telegram deleted anything. A separate authenticated
+    cleanup worker must confirm remote deletion before the record is purged.
+    """
+    asset = db.scalar(select(MediaAsset).where(MediaAsset.id == asset_id).with_for_update())
+    if asset is None:
+        raise AppError(404, "NOT_FOUND", "Asset does not exist.")
+    if asset.provider != "telegram":
+        raise AppError(409, "UNSUPPORTED_PROVIDER", "Only Telegram assets support storage cleanup.")
+    if asset.upload_status not in ("inactive", "cleanup_pending"):
+        raise AppError(409, "ASSET_STILL_ACTIVE", "Disable the asset before requesting cleanup.")
+    if asset.upload_status == "cleanup_pending":
+        return {"id": asset.id, "status": "cleanup_pending", "telegram_deleted": False}
+    # A shared Telegram message must never be removed while referenced by another asset.
+    # Compare encrypted references by decrypting in memory (Fernet is randomized).
+    refs = {decrypt(asset.provider_ref_encrypted)}
+    refs.update(decrypt(ref) for ref in (asset.segment_refs_encrypted or []))
+    others = db.scalars(select(MediaAsset).where(MediaAsset.id != asset.id, MediaAsset.provider == "telegram"))
+    for other in others:
+        other_refs = {decrypt(other.provider_ref_encrypted)}
+        other_refs.update(decrypt(ref) for ref in (other.segment_refs_encrypted or []))
+        if refs & other_refs:
+            raise AppError(409, "SHARED_STORAGE_REFERENCE", "Storage messages are referenced by another asset.")
+    asset.upload_status = "cleanup_pending"
+    audit(db, admin.id, "media.cleanup_requested", "media_asset", asset.id,
+          {"telegram_deleted": False})
+    db.commit()
+    return {"id": asset.id, "status": "cleanup_pending", "telegram_deleted": False}
