@@ -209,3 +209,68 @@ def test_transcode_continues_after_one_failed_quality(tmp_path, monkeypatch):
     assert qualities == ["480p", "360p"]
     assert errors == [("720p", "TRANSCODE_FAILED")]
     assert not (tmp_path / "qualities" / "720p.mp4").exists()
+
+
+def test_resume_qualities_uses_retained_source_and_skips_existing(tmp_path, monkeypatch):
+    import hashlib
+    import uuid
+    from types import SimpleNamespace
+    from shofly_worker import runner, transcode
+    from shofly_worker import probe as probe_module
+    root = tmp_path / "downloads"
+    root.mkdir()
+    jid = str(uuid.uuid4())
+    folder = root / jid
+    folder.mkdir()
+    source = folder / "video.mp4"
+    source.write_bytes(b"retained-original")
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    (folder / "quality_resume.json").write_text(json.dumps({
+        "asset_id": str(uuid.uuid4()), "source_file": source.name,
+        "source_sha256": sha, "info": {"quality": "1080p"}
+    }))
+    class Client:
+        def __init__(self): self.qualities = {"1080p", "720p"}; self.registered = []
+        def quality_state(self, asset_id):
+            return {"qualities": list(self.qualities), "source_checksum_sha256": sha}
+        def register_variant(self, asset_id, **fields):
+            self.registered.append(fields["quality"])
+            self.qualities.add(fields["quality"])
+            return {"duplicate": False}
+    class Provider:
+        max = 1000000
+        def upload(self, path, info): return "test-ref"
+        def verify(self, ref, size): return True
+        def delete(self, ref): raise AssertionError("Registered quality must not be deleted")
+    client = Client()
+    def fake_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"mp4-data")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+    monkeypatch.setattr(transcode.subprocess, "run", fake_run)
+    monkeypatch.setattr(probe_module, "probe", lambda path: {
+        "duration_sec": 30, "codec": "h264", "audio_language": None})
+    settings = SimpleNamespace(persistent_download_dir=str(root), generate_qualities=True,
+                               transcode_timeout=100, split_large_media=False, segment_max_bytes=0)
+    assert runner.resume_qualities(client, Provider(), settings) == ["QUALITIES_COMPLETED"]
+    assert client.registered == ["480p", "360p"]
+    assert not (folder / "quality_resume.json").exists()
+    assert (folder / "retention.json").exists()
+    assert runner.resume_qualities(client, Provider(), settings) == []
+
+
+def test_resume_rejects_modified_original(tmp_path):
+    import uuid
+    from types import SimpleNamespace
+    from shofly_worker.runner import resume_qualities
+    root = tmp_path / "downloads"; root.mkdir()
+    folder = root / str(uuid.uuid4()); folder.mkdir()
+    (folder / "video.mp4").write_bytes(b"tampered")
+    (folder / "quality_resume.json").write_text(json.dumps({
+        "asset_id": str(uuid.uuid4()), "source_file": "video.mp4",
+        "source_sha256": "0" * 64, "info": {"quality": "1080p"}
+    }))
+    class NeverCall:
+        def quality_state(self, asset_id):
+            raise AssertionError("Must reject tampered original")
+    settings = type("Settings", (), {"persistent_download_dir": str(root), "generate_qualities": True})()
+    assert resume_qualities(NeverCall(), None, settings) == []
