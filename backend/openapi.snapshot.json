@@ -1747,6 +1747,50 @@
         "summary": "Replace Media Asset"
       }
     },
+    "/api/v1/admin/import-jobs/assets/{asset_id}/request-cleanup": {
+      "post": {
+        "description": "Mark an inactive Telegram asset for operator-controlled storage cleanup.\n\nThis does NOT claim that Telegram deleted anything. A separate authenticated\ncleanup worker must confirm remote deletion before the record is purged.",
+        "operationId": "request_media_cleanup_api_v1_admin_import_jobs_assets__asset_id__request_cleanup_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Media Cleanup"
+      }
+    },
     "/api/v1/admin/import-jobs/assets/{asset_id}/restore": {
       "post": {
         "operationId": "restore_media_asset_api_v1_admin_import_jobs_assets__asset_id__restore_post",
