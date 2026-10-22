@@ -8,7 +8,7 @@ LADDER = ((1080, "4500k", "128k"), (720, "2500k", "128k"),
 
 
 def generate_variants(source: Path, output_dir: Path, original_height: int,
-                      timeout: int = 7200, check=lambda: None):
+                      timeout: int = 7200, check=lambda: None, on_error=None):
     """Yield (quality, path) one at a time to bound local disk usage.
 
     Never upscale; the original file is retained independently. FFmpeg failures
@@ -34,8 +34,14 @@ def generate_variants(source: Path, output_dir: Path, original_height: int,
             raise WorkerError("FFMPEG_UNAVAILABLE", "FFmpeg is not installed.", True) from exc
         except subprocess.TimeoutExpired as exc:
             output.unlink(missing_ok=True)
+            if on_error is not None:
+                on_error(f"{height}p", "TRANSCODE_TIMEOUT")
+                continue
             raise WorkerError("TRANSCODE_TIMEOUT", "Quality conversion timed out.", True) from exc
         if result.returncode or not output.is_file() or not output.stat().st_size:
             output.unlink(missing_ok=True)
+            if on_error is not None:
+                on_error(f"{height}p", "TRANSCODE_FAILED")
+                continue
             raise WorkerError("TRANSCODE_FAILED", "Unable to generate video quality.", True)
         yield f"{height}p", output
