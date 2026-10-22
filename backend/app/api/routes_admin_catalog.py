@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.api.deps import require_role
@@ -11,7 +11,7 @@ from app.audit import audit
 from app.catalog.service import KINDS
 from app.core.db import get_db
 from app.core.errors import AppError
-from app.models import (ContentRight, Episode, ImportJob, LocalizedMetadata, MediaAsset, Movie, Season, TvSeries, User)
+from app.models import (CollectionMovie, ContentRight, Episode, Favorite, ImportJob, LocalizedMetadata, MediaAsset, Movie, Season, TvSeries, User)
 from app.publishing import blockers, deliverable_episode_ids
 from app.users import ROLES
 
@@ -195,3 +195,50 @@ def patch_user(user_id: uuid.UUID, body: UserPatch, admin: User = Depends(su), d
     audit(db, admin.id, "user.update", "user", u.id, {"before": before, "after": {"role": u.role, "status": u.status}})
     db.commit()
     return {"id": u.id, "role": u.role, "status": u.status}
+
+
+@router.post("/catalog/movie/{item_id}/delete-all")
+def delete_movie_all(item_id: uuid.UUID, admin: User = Depends(staff), db: Session = Depends(get_db)):
+    """Stage complete deletion. Telegram removal is performed by the MTProto worker."""
+    movie = db.scalar(select(Movie).where(Movie.id == item_id).with_for_update())
+    if movie is None:
+        raise AppError(404, "NOT_FOUND", "Movie not found.")
+    jobs = list(db.scalars(select(ImportJob).where(ImportJob.candidate_kind == "movie", ImportJob.target_id == item_id)))
+    active = [j for j in jobs if j.status in ("DOWNLOADING", "PROBING", "PROCESSING", "UPLOADING", "VERIFYING")]
+    if active:
+        raise AppError(409, "IMPORT_ACTIVE", "Wait for running imports to finish or cancel them first.")
+    assets = list(db.scalars(select(MediaAsset).where(MediaAsset.movie_id == item_id).with_for_update()))
+    if any(a.provider != "telegram" and a.upload_status != "deleted" for a in assets):
+        raise AppError(409, "UNSUPPORTED_PROVIDER", "Non-Telegram storage requires manual cleanup.")
+    movie.status = "deleting"
+    for a in assets:
+        if a.upload_status not in ("deleted", "cleanup_processing"):
+            a.upload_status = "cleanup_pending"
+    audit(db, admin.id, "movie.delete_all_requested", "movie", item_id,
+          {"assets": len(assets), "jobs": len(jobs)})
+    db.commit()
+    return {"status": "deleting", "assets": len(assets), "jobs": len(jobs),
+            "message": "Run MTProto worker to remove Telegram files and finalize deletion."}
+
+
+def finalize_deleted_movie(db: Session, movie_id: uuid.UUID) -> bool:
+    movie = db.scalar(select(Movie).where(Movie.id == movie_id).with_for_update())
+    if movie is None or movie.status != "deleting":
+        return False
+    assets = list(db.scalars(select(MediaAsset).where(MediaAsset.movie_id == movie_id)))
+    if any(a.upload_status != "deleted" for a in assets):
+        return False
+    jobs = list(db.scalars(select(ImportJob).where(ImportJob.candidate_kind == "movie", ImportJob.target_id == movie_id)))
+    for a in assets:
+        db.delete(a)
+    db.flush()
+    for j in jobs:
+        db.delete(j)
+    db.execute(delete(CollectionMovie).where(CollectionMovie.movie_id == movie_id))
+    db.execute(delete(Favorite).where(Favorite.content_kind == "movie", Favorite.content_id == movie_id))
+    db.execute(delete(LocalizedMetadata).where(LocalizedMetadata.content_kind == "movie", LocalizedMetadata.content_id == movie_id))
+    db.execute(delete(ContentRight).where(ContentRight.content_kind == "movie", ContentRight.content_id == movie_id))
+    db.delete(movie)
+    audit(db, None, "movie.delete_all_completed", "movie", movie_id,
+          {"assets": len(assets), "jobs": len(jobs)})
+    return True
