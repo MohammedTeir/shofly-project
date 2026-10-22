@@ -33,6 +33,139 @@ class Heartbeat(threading.Thread):
                 log.warning("heartbeat failed for job %s", self.jid)
 
 
+def process_qualities(client, provider, settings, source: Path, tmp: Path, jid: str,
+                      source_asset_id: str, info: dict, check=lambda: None) -> bool:
+    """Reconcile against backend and upload only missing quality rungs."""
+    from shofly_worker.transcode import LADDER
+    try:
+        state = client.quality_state(source_asset_id)
+    except ApiError as exc:
+        log.warning("quality_resume_blocked job_id=%s code=%s", jid, exc.code)
+        return False
+    completed_qualities = set(state["qualities"])
+    expected = {f"{h}p" for h, _, _ in LADDER if h < int(str(info.get("quality") or "0p").removesuffix("p"))}
+    if expected.issubset(completed_qualities):
+        return True
+    try:
+                # The original is committed first. Variant failures never roll it back.
+                try:
+                    from shofly_worker.transcode import generate_variants
+                    from shofly_worker.probe import probe as real_probe
+                    height = int(str(info.get("quality") or "0p").removesuffix("p"))
+                    for quality, variant_path in generate_variants(
+                        source, tmp / "qualities", height, getattr(settings, "transcode_timeout", 7200),
+                        check=check,
+                        on_error=lambda q, code: log.warning("quality_transcode_failed job_id=%s quality=%s code=%s", jid, q, code)
+                    ):
+                        if quality in completed_qualities:
+                            variant_path.unlink(missing_ok=True)
+                            continue
+                        variant_refs = []
+                        registered = False
+                        try:
+                            variant_info = real_probe(variant_path)
+                            provider_limit = getattr(provider, "max", None)
+                            part_limit = getattr(settings, "segment_max_bytes", 0) or provider_limit
+                            if part_limit and provider_limit:
+                                part_limit = min(part_limit, provider_limit)
+                            if part_limit and variant_path.stat().st_size > part_limit:
+                                if not getattr(settings, "split_large_media", False):
+                                    raise WorkerError("FILE_TOO_LARGE", "Generated quality exceeds Telegram upload limit.", False)
+                                variant_parts = split_playable(variant_path, tmp / ("quality_segments_" + quality),
+                                                               part_limit, variant_info["duration_sec"])
+                            else:
+                                variant_parts = [variant_path]
+                            for variant_part in variant_parts:
+                                variant_ref = provider.upload(variant_part, variant_info)
+                                variant_refs.append(variant_ref)
+                                if not provider.verify(variant_ref, variant_part.stat().st_size):
+                                    raise WorkerError("VERIFY_FAILED", "Quality upload could not be verified.", True)
+                            variant_hash = hashlib.sha256()
+                            with variant_path.open("rb") as variant_file:
+                                for block in iter(lambda: variant_file.read(1024 * 1024), b""):
+                                    variant_hash.update(block)
+                            result = client.register_variant(
+                                source_asset_id, provider_ref=variant_refs[0],
+                                segment_refs=variant_refs if len(variant_refs) > 1 else [],
+                                size_bytes=variant_path.stat().st_size,
+                                checksum_sha256=variant_hash.hexdigest(), quality=quality,
+                                duration_sec=variant_info["duration_sec"], codec=variant_info.get("codec"),
+                                audio_language=variant_info.get("audio_language"))
+                            registered = not result.get("duplicate")
+                            completed_qualities.add(quality)
+                            log.info("quality_ready job_id=%s quality=%s bytes=%d", jid, quality, variant_path.stat().st_size)
+                        except Exception as exc:
+                            # One quality's upload failure must not prevent later qualities.
+                            # Unregistered Telegram uploads are removed in the finally block.
+                            log.warning("quality_upload_failed job_id=%s quality=%s reason=%s",
+                                        jid, quality, type(exc).__name__)
+                        finally:
+                            if not registered:
+                                for orphan_ref in variant_refs:
+                                    try:
+                                        if hasattr(provider, "delete_confirmed"):
+                                            if not provider.delete_confirmed(orphan_ref):
+                                                raise RuntimeError("Telegram deletion not confirmed")
+                                        else:
+                                            provider.delete(orphan_ref)
+                                    except Exception:
+                                        log.warning("quality_orphan_cleanup_failed job_id=%s quality=%s", jid, quality)
+                            variant_path.unlink(missing_ok=True)
+                except Exception as exc:
+                    log.warning("quality_generation_incomplete job_id=%s reason=%s", jid, type(exc).__name__)
+    
+    except Exception as exc:
+        log.warning("quality_resume_failed job_id=%s reason=%s", jid, type(exc).__name__)
+    try:
+        return expected.issubset(set(client.quality_state(source_asset_id)["qualities"]))
+    except ApiError:
+        return False
+
+
+def resume_qualities(client, provider, settings) -> list[str]:
+    """Resume retained completed imports without fetching the original URL again."""
+    root = getattr(settings, "persistent_download_dir", "")
+    if not root or not getattr(settings, "generate_qualities", False):
+        return []
+    from shofly_worker.retention import _root
+    try:
+        folder = _root(root)
+    except (ValueError, OSError):
+        return []
+    results = []
+    import uuid
+    for tmp in sorted(folder.iterdir()):
+        if not tmp.is_dir() or tmp.is_symlink():
+            continue
+        try:
+            jid = str(uuid.UUID(tmp.name))
+            if jid != tmp.name:
+                continue
+            marker = tmp / "quality_resume.json"
+            if not marker.is_file() or marker.is_symlink():
+                continue
+            state = json.loads(marker.read_text())
+            source = tmp / state["source_file"]
+            if source.parent != tmp or not source.is_file() or source.is_symlink():
+                continue
+            if hashlib.sha256(source.read_bytes()).hexdigest() != state["source_sha256"]:
+                log.warning("quality_resume_checksum_mismatch job_id=%s", jid)
+                continue
+            touch_active(tmp)
+            try:
+                done = process_qualities(client, provider, settings, source, tmp, jid,
+                                         state["asset_id"], state["info"])
+                if done:
+                    marker.unlink(missing_ok=True)
+                    mark_final(tmp)
+                results.append("QUALITIES_COMPLETED" if done else "QUALITIES_PENDING")
+            finally:
+                clear_active(tmp)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            log.warning("quality_resume_skipped reason=%s", type(exc).__name__)
+    return results
+
+
 def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client, resolver=None, probe_fn=probe) -> str | None:
     """Claim and process one job. Returns the outcome label, or None if the queue is empty.
     Only a successful /complete marks a job done; any crash/disconnect leaves it to lease expiry."""
@@ -40,7 +173,7 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
     if job is None:
         return None
     jid = job["id"]
-    persistent = bool(settings.persistent_download_dir) and settings.downloader == "aria2c"
+    persistent = bool(settings.persistent_download_dir) and (settings.downloader == "aria2c" or getattr(settings, "generate_qualities", False))
     tmp = job_dir(settings.persistent_download_dir, jid) if persistent else Path(settings.tmp_dir) / jid
     retain_partial = persistent
     completed = False
@@ -145,68 +278,18 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                     log.warning("duplicate_cleanup_failed job_id=%s", jid)
         log.info("job_completed job_id=%s elapsed_s=%.1f", jid, time.monotonic()-started)
         if getattr(settings, "generate_qualities", False) and not receipt.get("duplicate"):
-            # The original is committed first. Variant failures never roll it back.
-            try:
-                from shofly_worker.transcode import generate_variants
-                from shofly_worker.probe import probe as real_probe
-                height = int(str(info.get("quality") or "0p").removesuffix("p"))
-                for quality, variant_path in generate_variants(
-                    source, tmp / "qualities", height, getattr(settings, "transcode_timeout", 7200),
-                    check=check,
-                    on_error=lambda q, code: log.warning("quality_transcode_failed job_id=%s quality=%s code=%s", jid, q, code)
-                ):
-                    variant_refs = []
-                    registered = False
-                    try:
-                        variant_info = real_probe(variant_path)
-                        provider_limit = getattr(provider, "max", None)
-                        part_limit = getattr(settings, "segment_max_bytes", 0) or provider_limit
-                        if part_limit and provider_limit:
-                            part_limit = min(part_limit, provider_limit)
-                        if part_limit and variant_path.stat().st_size > part_limit:
-                            if not getattr(settings, "split_large_media", False):
-                                raise WorkerError("FILE_TOO_LARGE", "Generated quality exceeds Telegram upload limit.", False)
-                            variant_parts = split_playable(variant_path, tmp / ("quality_segments_" + quality),
-                                                           part_limit, variant_info["duration_sec"])
-                        else:
-                            variant_parts = [variant_path]
-                        for variant_part in variant_parts:
-                            variant_ref = provider.upload(variant_part, variant_info)
-                            variant_refs.append(variant_ref)
-                            if not provider.verify(variant_ref, variant_part.stat().st_size):
-                                raise WorkerError("VERIFY_FAILED", "Quality upload could not be verified.", True)
-                        variant_hash = hashlib.sha256()
-                        with variant_path.open("rb") as variant_file:
-                            for block in iter(lambda: variant_file.read(1024 * 1024), b""):
-                                variant_hash.update(block)
-                        result = client.register_variant(
-                            str(receipt["asset_id"]), provider_ref=variant_refs[0],
-                            segment_refs=variant_refs if len(variant_refs) > 1 else [],
-                            size_bytes=variant_path.stat().st_size,
-                            checksum_sha256=variant_hash.hexdigest(), quality=quality,
-                            duration_sec=variant_info["duration_sec"], codec=variant_info.get("codec"),
-                            audio_language=variant_info.get("audio_language"))
-                        registered = not result.get("duplicate")
-                        log.info("quality_ready job_id=%s quality=%s bytes=%d", jid, quality, variant_path.stat().st_size)
-                    except Exception as exc:
-                        # One quality's upload failure must not prevent later qualities.
-                        # Unregistered Telegram uploads are removed in the finally block.
-                        log.warning("quality_upload_failed job_id=%s quality=%s reason=%s",
-                                    jid, quality, type(exc).__name__)
-                    finally:
-                        if not registered:
-                            for orphan_ref in variant_refs:
-                                try:
-                                    if hasattr(provider, "delete_confirmed"):
-                                        if not provider.delete_confirmed(orphan_ref):
-                                            raise RuntimeError("Telegram deletion not confirmed")
-                                    else:
-                                        provider.delete(orphan_ref)
-                                except Exception:
-                                    log.warning("quality_orphan_cleanup_failed job_id=%s quality=%s", jid, quality)
-                        variant_path.unlink(missing_ok=True)
-            except Exception as exc:
-                log.warning("quality_generation_incomplete job_id=%s reason=%s", jid, type(exc).__name__)
+            if persistent:
+                (tmp / "quality_resume.json").write_text(json.dumps({
+                    "asset_id": str(receipt["asset_id"]), "source_file": source.name,
+                    "source_sha256": sha, "info": info
+                }))
+            qualities_done = process_qualities(client, provider, settings, source, tmp, jid,
+                                              str(receipt["asset_id"]), info, check)
+            if persistent and qualities_done:
+                (tmp / "quality_resume.json").unlink(missing_ok=True)
+                mark_final(tmp)
+        elif persistent:
+            mark_final(tmp)
         return "COMPLETED"
     except LeaseLost:
         retain_partial = persistent
@@ -232,8 +315,9 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
         hb.stop_evt.set()
         if persistent and tmp.exists():
             clear_active(tmp)
-        if completed or not retain_partial:
-            shutil.rmtree(tmp, ignore_errors=True)
+        if (completed and not (persistent and (tmp / "quality_resume.json").exists())) or not retain_partial:
+            if not persistent:
+                shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _report(client, jid, code, msg, retryable):
@@ -282,11 +366,12 @@ def run_until_empty(client, provider, settings, dl_http, max_jobs: int = 100, **
         if cleanup_result is None:
             break
         results.append(cleanup_result)
-    if getattr(settings, "persistent_download_dir", "") and getattr(settings, "downloader", "httpx") == "aria2c":
+    if getattr(settings, "persistent_download_dir", ""):
         try:
             cleanup(settings.persistent_download_dir)
         except (OSError, ValueError) as exc:
             log.warning("retention_cleanup_failed reason=%s", type(exc).__name__)
+    results.extend(resume_qualities(client, provider, settings))
     for _ in range(max_jobs):
         out = process_one(client, provider, settings, dl_http, **kw)
         if out is None:
