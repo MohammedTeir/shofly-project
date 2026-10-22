@@ -198,3 +198,38 @@ def restore_media_asset(asset_id: uuid.UUID, admin: User = Depends(staff), db: S
         audit(db, admin.id, "media.restore", "media_asset", a.id)
         db.commit()
     return {"id": a.id, "upload_status": a.upload_status}
+
+
+class ReplaceAssetIn(BaseModel):
+    replacement_asset_id: uuid.UUID
+
+
+@router.post("/assets/{asset_id}/replace")
+def replace_media_asset(asset_id: uuid.UUID, body: ReplaceAssetIn,
+                        admin: User = Depends(staff), db: Session = Depends(get_db)):
+    """Atomically switch delivery to an already verified replacement for the same title.
+
+    Telegram messages are deliberately retained; physical deletion requires a separate,
+    failure-aware storage cleanup workflow. This endpoint is safe to retry.
+    """
+    if asset_id == body.replacement_asset_id:
+        raise AppError(409, "INVALID_REPLACEMENT", "Select a different replacement asset.")
+    assets = list(db.scalars(select(MediaAsset).where(
+        MediaAsset.id.in_([asset_id, body.replacement_asset_id])).order_by(MediaAsset.id).with_for_update()))
+    old = next((a for a in assets if a.id == asset_id), None)
+    new = next((a for a in assets if a.id == body.replacement_asset_id), None)
+    if old is None or new is None:
+        raise AppError(404, "NOT_FOUND", "Asset does not exist.")
+    if old.movie_id != new.movie_id or old.episode_id != new.episode_id:
+        raise AppError(409, "TARGET_MISMATCH", "Both assets must belong to the same movie or episode.")
+    if old.upload_status not in ("verified", "inactive") or new.upload_status != "verified":
+        raise AppError(409, "REPLACEMENT_NOT_VERIFIED", "Replacement must be verified and active.")
+    kind, target = ("movie", old.movie_id) if old.movie_id else ("episode", old.episode_id)
+    if not has_valid_rights(db, kind, target):
+        raise AppError(409, "RIGHTS_NOT_APPROVED", "Valid content rights are required.")
+    old.upload_status = "inactive"
+    audit(db, admin.id, "media.replace", "media_asset", old.id,
+          {"replacement_asset_id": str(new.id), "telegram_deleted": False})
+    db.commit()
+    return {"old_asset_id": old.id, "replacement_asset_id": new.id,
+            "old_status": "inactive", "replacement_status": "verified", "telegram_deleted": False}
