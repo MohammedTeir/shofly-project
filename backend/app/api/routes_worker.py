@@ -260,3 +260,28 @@ def register_variant(source_asset_id: uuid.UUID, body: VariantIn, db: Session = 
           {"source_asset_id": str(source_asset_id), "quality": body.quality})
     db.commit()
     return {"asset_id": asset.id, "duplicate": False}
+
+
+@router.get("/assets/{source_asset_id}/quality-state")
+def quality_state(source_asset_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Worker-only reconciliation: never return encrypted Telegram references."""
+    source = db.get(MediaAsset, source_asset_id)
+    if not source or source.provider != "telegram" or source.upload_status != "verified":
+        raise AppError(404, "SOURCE_NOT_FOUND", "Source is unavailable.")
+    job = db.get(ImportJob, source.import_job_id) if source.import_job_id else None
+    if not job or job.status != "COMPLETED":
+        raise AppError(409, "SOURCE_NOT_COMPLETED", "Original import is not completed.")
+    kind, target = ("movie", source.movie_id) if source.movie_id else ("episode", source.episode_id)
+    if kind == "movie":
+        movie = db.get(Movie, target)
+        if not movie or movie.status == "deleting":
+            raise AppError(409, "CONTENT_DELETING", "Movie is being deleted.")
+    if not has_valid_rights(db, kind, target):
+        raise AppError(409, "BLOCKED_RIGHTS", "Rights are not valid.")
+    col = MediaAsset.movie_id if source.movie_id else MediaAsset.episode_id
+    rows = db.scalars(select(MediaAsset).where(col == target,
+                      MediaAsset.upload_status == "verified",
+                      MediaAsset.provider == "telegram")).all()
+    return {"source_asset_id": source.id,
+            "qualities": sorted({a.quality for a in rows if a.quality}),
+            "source_checksum_sha256": source.checksum_sha256}
