@@ -21,8 +21,8 @@ log = logging.getLogger('shofly_worker')
 
 
 async def upload_parallel(client, path: Path, workers: int = 4, retries: int = 2):
-    if not 1 <= workers <= 8:
-        raise ValueError("workers must be between 1 and 8")
+    if not 1 <= workers <= 32:
+        raise ValueError("workers must be between 1 and 32")
     clients = list(client) if isinstance(client, (list, tuple)) else [client]
     if not clients or len(clients) > workers:
         raise ValueError("connections must be between 1 and total workers")
