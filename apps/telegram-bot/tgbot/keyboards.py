@@ -68,7 +68,7 @@ def quality_kb(assets: list[dict], lang: str, back_data: str) -> M:
     """One button per verified, deliverable quality; sizes are real stored bytes."""
     def height(a):
         import re
-        m = re.fullmatch(r"(\\d+)p", str(a.get("quality") or ""))
+        m = re.fullmatch(r"(\d+)p", str(a.get("quality") or ""))
         return int(m.group(1)) if m else 0
     ordered = sorted(assets, key=lambda a: (height(a), a.get("size_bytes") or 0), reverse=True)
     rows = [[B(text=f"📥 {asset_label(a) or ('نسخة الفيديو' if lang == 'ar' else 'Video file')}", callback_data=cb.dl_cb(str(a["id"])))] for a in ordered[:12]]
