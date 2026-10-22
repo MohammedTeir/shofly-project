@@ -197,7 +197,11 @@ def process_one(client: BackendClient, provider, settings, dl_http: httpx.Client
                         if not registered:
                             for orphan_ref in variant_refs:
                                 try:
-                                    provider.delete(orphan_ref)
+                                    if hasattr(provider, "delete_confirmed"):
+                                        if not provider.delete_confirmed(orphan_ref):
+                                            raise RuntimeError("Telegram deletion not confirmed")
+                                    else:
+                                        provider.delete(orphan_ref)
                                 except Exception:
                                     log.warning("quality_orphan_cleanup_failed job_id=%s quality=%s", jid, quality)
                         variant_path.unlink(missing_ok=True)
